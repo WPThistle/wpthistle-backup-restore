@@ -27,13 +27,39 @@ class Settings {
 	const LEGACY_APP_PW_CONST    = 'WPGUARD_NC_APP_PASSWORD';
 	const LEGACY_CA_BUNDLE_CONST = 'WPGUARD_NC_CA_BUNDLE';
 
-	// Phase 2 (scheduling): a plain WP-Cron recurrence name, reused
-	// directly as both the stored setting value and the schedule's
-	// registered name (see register_weekly_schedule() in the main
-	// plugin file). 'disabled' means no recurring event at all --
-	// chosen as the default so activating or updating the plugin never
-	// silently starts recurring jobs an admin didn't ask for.
-	const SCHEDULE_CHOICES = array( 'disabled', 'daily', 'weekly' );
+	/**
+	 * Phase 4 (day-based scheduling, replaces the old Disabled/Daily/
+	 * Weekly dropdown, and -- as of Phase 5 -- the exact HH:MM slot that
+	 * briefly replaced it): schedule_days is a list of ints 0 (Sunday)
+	 * .. 6 (Saturday), PHP DateTime's own 'w' convention -- an empty
+	 * array means disabled, chosen as the default (same reasoning the
+	 * old 'disabled' default had) so activating or updating the plugin
+	 * never silently starts recurring jobs an admin didn't ask for.
+	 * There is deliberately no time-of-day field any more: an exact
+	 * instant still needed a request to land near that one moment for
+	 * WP-Cron's pseudo-cron to ever pick it up, which a genuinely quiet
+	 * site could miss entirely. See Daily_Trigger and
+	 * maybe_run_daily_backup() in the main plugin file -- any request at
+	 * any time on a selected day is now early enough.
+	 */
+	const DEFAULT_RETENTION_DAILY = 7;
+	const DEFAULT_RETENTION_WEEKLY = 4;
+	const DEFAULT_RETENTION_MONTHLY = 12;
+
+	/**
+	 * Phase 6 (backup plan dropdown): replaces the Phase 5 state where
+	 * tiered retention was its own independent checkbox that could be
+	 * combined with day-of-week selection in a way that didn't make
+	 * sense (e.g. "tiered daily retention" while only backing up two
+	 * days a week isn't really daily retention at all). Now a single
+	 * choice: 'scheduled' (an admin-picked cadence -- daily day-of-week,
+	 * or monthly day-of-month -- plus the simple keep-last-N count) or
+	 * 'tiered' (backs up every day, no day picker, GFS-style daily/
+	 * weekly/monthly keep-counts instead of one flat count). See
+	 * get_schedule_mode()/the migration note in get_all().
+	 */
+	const SCHEDULE_MODES = array( 'scheduled', 'tiered' );
+	const SCHEDULE_CADENCES = array( 'daily', 'monthly' );
 
 	/**
 	 * Phase 3 (multi-backend): Nextcloud_Client is already a generic
@@ -65,11 +91,39 @@ class Settings {
 			'app_password'   => '',
 			'remote_folder'  => '',
 			'ca_bundle_path' => '',
-			'schedule'       => 'disabled',
+			'schedule_days'  => array(),
+			'schedule_cadence'      => 'daily',
+			'schedule_day_of_month' => 1,
 			'retention_count' => 0,
+			// Tiered (GFS-style) retention, Phase 5: OFF by default
+			// (retention_tiered_enabled false) regardless of these
+			// numbers being pre-filled -- an existing install upgrading
+			// into this must never start deleting backups it wasn't
+			// already deleting, same "admin must explicitly opt in"
+			// discipline retention_count itself has always had.
+			// retention_count (above) is untouched and keeps working
+			// exactly as before for anyone already using it; the two
+			// schemes are mutually exclusive -- see
+			// Job_Orchestrator::maybe_prune_old_backups().
+			'retention_tiered_enabled' => false,
+			'retention_daily'   => self::DEFAULT_RETENTION_DAILY,
+			'retention_weekly'  => self::DEFAULT_RETENTION_WEEKLY,
+			'retention_monthly' => self::DEFAULT_RETENTION_MONTHLY,
 			'incremental_enabled' => false,
 		);
-		return array_merge( $defaults, $stored );
+		$merged = array_merge( $defaults, $stored );
+		// Phase 6 migration: schedule_mode didn't exist before this
+		// release -- an install upgrading from Phase 5, where tiered
+		// retention was its own independent checkbox, must land on
+		// whichever mode it was already effectively using (that
+		// checkbox's last saved value), not silently reset to
+		// 'scheduled' and lose an explicit prior opt-in. A fresh install
+		// has no stored retention_tiered_enabled either, so this
+		// correctly lands on the safe 'scheduled' default.
+		if ( ! isset( $stored['schedule_mode'] ) ) {
+			$merged['schedule_mode'] = ! empty( $merged['retention_tiered_enabled'] ) ? 'tiered' : 'scheduled';
+		}
+		return $merged;
 	}
 
 	/**
@@ -90,9 +144,21 @@ class Settings {
 		return in_array( $value, self::BACKEND_CHOICES, true ) ? $value : 'nextcloud';
 	}
 
-	public static function get_schedule(): string {
-		$value = (string) self::get_all()['schedule'];
-		return in_array( $value, self::SCHEDULE_CHOICES, true ) ? $value : 'disabled';
+	/** Sorted, de-duplicated list of ints 0 (Sunday) .. 6 (Saturday); empty = disabled. */
+	public static function get_schedule_days(): array {
+		$raw = self::get_all()['schedule_days'];
+		if ( ! is_array( $raw ) ) {
+			return array();
+		}
+		$clean = array();
+		foreach ( $raw as $day ) {
+			$day = is_numeric( $day ) ? (int) $day : -1;
+			if ( $day >= 0 && $day <= 6 && ! in_array( $day, $clean, true ) ) {
+				$clean[] = $day;
+			}
+		}
+		sort( $clean );
+		return $clean;
 	}
 
 	/**
@@ -104,6 +170,52 @@ class Settings {
 		$value = self::get_all()['retention_count'];
 		$int = is_numeric( $value ) ? (int) $value : 0;
 		return max( 0, $int );
+	}
+
+	/** 'scheduled' (default) or 'tiered' -- see SCHEDULE_MODES' docblock above. */
+	public static function get_schedule_mode(): string {
+		$value = (string) self::get_all()['schedule_mode'];
+		return in_array( $value, self::SCHEDULE_MODES, true ) ? $value : 'scheduled';
+	}
+
+	/** 'daily' (default) or 'monthly' -- only consulted while get_schedule_mode() is 'scheduled'. */
+	public static function get_schedule_cadence(): string {
+		$value = (string) self::get_all()['schedule_cadence'];
+		return in_array( $value, self::SCHEDULE_CADENCES, true ) ? $value : 'daily';
+	}
+
+	/**
+	 * @return int|string An int 1-31 (exact day-of-month -- a month
+	 *   shorter than that day has no match that month, e.g. 31 in
+	 *   April), or the string 'last' (always matches whatever the final
+	 *   calendar day of the current month actually is). Only consulted
+	 *   while get_schedule_cadence() is 'monthly'.
+	 */
+	public static function get_schedule_day_of_month() {
+		$value = self::get_all()['schedule_day_of_month'];
+		if ( 'last' === $value ) {
+			return 'last';
+		}
+		$int = is_numeric( $value ) ? (int) $value : 1;
+		return ( $int >= 1 && $int <= 31 ) ? $int : 1;
+	}
+
+	/** Derived from get_schedule_mode() -- false means the simple keep-last-N scheme is what runs, if anything -- see maybe_prune_old_backups(). */
+	public static function get_retention_tiered_enabled(): bool {
+		return 'tiered' === self::get_schedule_mode();
+	}
+
+	/** @return array{daily:int, weekly:int, monthly:int} Non-negative bucket counts; a non-numeric/negative stored value clamps to 0 for that tier. */
+	public static function get_retention_tiers(): array {
+		$all = self::get_all();
+		$clamp = static function ( $v ): int {
+			return is_numeric( $v ) ? max( 0, (int) $v ) : 0;
+		};
+		return array(
+			'daily'   => $clamp( $all['retention_daily'] ),
+			'weekly'  => $clamp( $all['retention_weekly'] ),
+			'monthly' => $clamp( $all['retention_monthly'] ),
+		);
 	}
 
 	/** Which defined constant name is actually locking the app password, '' if neither is. */
@@ -244,12 +356,42 @@ class Settings {
 			}
 		}
 
-		// Always a <select> with a fixed option list in the admin UI, so an
-		// unrecognized value (tampering, or a future form change missed
-		// here) falls back to the safe default rather than erroring the
-		// whole save.
-		$schedule = isset( $input['schedule'] ) ? (string) $input['schedule'] : 'disabled';
-		$clean['schedule'] = in_array( $schedule, self::SCHEDULE_CHOICES, true ) ? $schedule : 'disabled';
+		// schedule_days: a fixed set of checkboxes (values 0-6) in the
+		// admin UI -- same clamp-not-fail tolerance as the old schedule
+		// dropdown. An absent/malformed entry is simply dropped rather
+		// than erroring the whole save; an empty result means disabled,
+		// same as before.
+		$days_raw = isset( $input['schedule_days'] ) && is_array( $input['schedule_days'] ) ? $input['schedule_days'] : array();
+		$days_clean = array();
+		foreach ( $days_raw as $day ) {
+			$day = is_numeric( $day ) ? (int) $day : -1;
+			if ( $day >= 0 && $day <= 6 && ! in_array( $day, $days_clean, true ) ) {
+				$days_clean[] = $day;
+			}
+		}
+		sort( $days_clean );
+		$clean['schedule_days'] = $days_clean;
+
+		// Phase 6: the backup-plan dropdown and its cadence sub-choice.
+		// Both are always a fixed <select> in the admin UI -- same
+		// clamp-not-fail tolerance as backend/schedule above.
+		$mode = isset( $input['schedule_mode'] ) ? (string) $input['schedule_mode'] : 'scheduled';
+		$clean['schedule_mode'] = in_array( $mode, self::SCHEDULE_MODES, true ) ? $mode : 'scheduled';
+
+		$cadence = isset( $input['schedule_cadence'] ) ? (string) $input['schedule_cadence'] : 'daily';
+		$clean['schedule_cadence'] = in_array( $cadence, self::SCHEDULE_CADENCES, true ) ? $cadence : 'daily';
+
+		// schedule_day_of_month: an int 1-31, or the literal string
+		// 'last' ("Last Day of the Month" option) -- same clamp-not-fail
+		// tolerance; an invalid value falls back to the 1st rather than
+		// erroring the whole save.
+		$dom_raw = isset( $input['schedule_day_of_month'] ) ? $input['schedule_day_of_month'] : 1;
+		if ( 'last' === $dom_raw ) {
+			$clean['schedule_day_of_month'] = 'last';
+		} else {
+			$dom_int = is_numeric( $dom_raw ) ? (int) $dom_raw : 1;
+			$clean['schedule_day_of_month'] = ( $dom_int >= 1 && $dom_int <= 31 ) ? $dom_int : 1;
+		}
 
 		// Retention count: 0 or a non-negative integer. Same
 		// non-hard-fail tolerance as schedule above -- clamps to the
@@ -258,6 +400,23 @@ class Settings {
 		// min=0> in the admin UI, not free text.
 		$retention_raw = isset( $input['retention_count'] ) ? $input['retention_count'] : 0;
 		$clean['retention_count'] = is_numeric( $retention_raw ) ? max( 0, (int) $retention_raw ) : 0;
+
+		// Tiered retention: Phase 6 removed the independent checkbox --
+		// this is now derived entirely from schedule_mode above (stored
+		// too, purely so an old install's last value is still legible/
+		// greppable and get_all()'s migration check above keeps working
+		// for any row saved under this version or later).
+		$clean['retention_tiered_enabled'] = ( 'tiered' === $clean['schedule_mode'] );
+		// Same clamp-to-0 convention as retention_count above (never a
+		// per-tier "default" like 7/4/12 on garbage input -- 0 is the
+		// one value that's unambiguously safe regardless of what the
+		// admin actually intended).
+		$tier_clamp = static function ( $v ): int {
+			return is_numeric( $v ) ? max( 0, (int) $v ) : 0;
+		};
+		$clean['retention_daily'] = isset( $input['retention_daily'] ) ? $tier_clamp( $input['retention_daily'] ) : self::DEFAULT_RETENTION_DAILY;
+		$clean['retention_weekly'] = isset( $input['retention_weekly'] ) ? $tier_clamp( $input['retention_weekly'] ) : self::DEFAULT_RETENTION_WEEKLY;
+		$clean['retention_monthly'] = isset( $input['retention_monthly'] ) ? $tier_clamp( $input['retention_monthly'] ) : self::DEFAULT_RETENTION_MONTHLY;
 
 		// Incremental backups: a plain checkbox, so any truthy submission
 		// means "on" and an absent field (checkbox unchecked -- browsers

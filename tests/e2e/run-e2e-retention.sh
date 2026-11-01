@@ -207,4 +207,66 @@ wp_source eval "
 " > /dev/null
 
 echo
+echo "=== Case F (Phase 5, tiered retention): prune_tiered() against the real server -- fixtures spanning 3 distinct calendar days, keep daily=1 only ==="
+TIERED_PARENT="wpthistle-backup-restore-tiered-retention-test-$(date +%s)"
+echo "Isolated test folder: $TIERED_PARENT"
+
+# 3 verified backups, 3 distinct UTC calendar days -- real backup_id
+# shape so parse_backup_id_timestamp()/tiered_keep_set() actually
+# bucket them (not synthetic test-only names).
+DAY1="20240101T030000Z-cccc0001"
+DAY2="20240102T030000Z-cccc0002"
+DAY3="20240103T030000Z-cccc0003"
+for NAME in "$DAY1" "$DAY2" "$DAY3"; do
+  wp_source eval "
+    \$client = \WPThistle\BackupRestore\Nextcloud_Client::from_settings( new \WPThistle\BackupRestore\Logger( array( \WPThistle\BackupRestore\Settings::get_app_password() ) ) );
+    \$parent = \$client->relative_path( '$TIERED_PARENT' );
+    \$client->mkcol_recursive( \$parent . '/$NAME' );
+    \$client->put_bytes( \$parent . '/$NAME/manifest.json', '{\"format_version\":2,\"backup_mode\":\"full\",\"files\":[]}' );
+    \$client->put_bytes( \$parent . '/$NAME/COMPLETE.json', '{\"ok\":true}' );
+  " > /dev/null
+done
+echo "OK  3 verified fixtures created on 3 distinct calendar days (2024-01-01, -02, -03)"
+
+echo
+echo "--- Case F1: every tier at 0 must be the disabled sentinel (kept=-1), nothing deleted ---"
+RESULT_F1=$(wp_source eval "
+  \$client = \WPThistle\BackupRestore\Nextcloud_Client::from_settings( new \WPThistle\BackupRestore\Logger( array() ) );
+  \$parent = \$client->relative_path( '$TIERED_PARENT' );
+  \$r = \WPThistle\BackupRestore\Retention::prune_tiered( \$client, \$parent, array( 'daily' => 0, 'weekly' => 0, 'monthly' => 0, 'timezone' => new \DateTimeZone('UTC') ) );
+  echo count(\$r['deleted']) . '|' . \$r['kept'];
+")
+[ "$RESULT_F1" = "0|-1" ] || { echo "FAIL: all-zero tiers should be the disabled sentinel, got '$RESULT_F1'"; exit 1; }
+echo "OK  all-zero tiers -> disabled sentinel, no deletions"
+
+echo
+echo "--- Case F2: daily=1 (weekly/monthly=0) must keep only the single most recent day (DAY3), delete DAY1 and DAY2 ---"
+RESULT_F2=$(wp_source eval "
+  \$client = \WPThistle\BackupRestore\Nextcloud_Client::from_settings( new \WPThistle\BackupRestore\Logger( array() ) );
+  \$parent = \$client->relative_path( '$TIERED_PARENT' );
+  \$r = \WPThistle\BackupRestore\Retention::prune_tiered( \$client, \$parent, array( 'daily' => 1, 'weekly' => 0, 'monthly' => 0, 'timezone' => new \DateTimeZone('UTC') ) );
+  \$deleted = \$r['deleted'];
+  sort(\$deleted);
+  echo implode(',', \$deleted) . '||' . \$r['kept'];
+")
+echo "result: $RESULT_F2"
+[ "$RESULT_F2" = "$DAY1,$DAY2||1" ] || { echo "FAIL: expected DAY1 and DAY2 deleted, kept=1 (DAY3 survives as the single most recent daily bucket), got '$RESULT_F2'"; exit 1; }
+echo "OK  prune_tiered() against the real server deleted exactly the 2 older days, kept the most recent day's backup"
+
+LISTED_AFTER_F2=$(wp_source eval "
+  \$client = \WPThistle\BackupRestore\Nextcloud_Client::from_settings( new \WPThistle\BackupRestore\Logger( array() ) );
+  \$children = \$client->list_children( \$client->relative_path( '$TIERED_PARENT' ) );
+  sort(\$children);
+  echo implode(',', \$children);
+")
+[ "$LISTED_AFTER_F2" = "$DAY3" ] || { echo "FAIL: real remote state after tiered pruning doesn't match -- expected only $DAY3 to remain, got '$LISTED_AFTER_F2'"; exit 1; }
+echo "OK  real Nextcloud state independently confirms: only the most recent day's backup remains"
+
+wp_source eval "
+  \$client = \WPThistle\BackupRestore\Nextcloud_Client::from_settings( new \WPThistle\BackupRestore\Logger( array() ) );
+  \$client->delete( \$client->relative_path( '$TIERED_PARENT' ) );
+" > /dev/null
+echo "OK  isolated tiered-retention test folder cleaned up"
+
+echo
 echo "=== RETENTION REGRESSION TEST PASSED ==="

@@ -197,27 +197,87 @@ low-traffic site. If no one visits the site and the admin closes the tab
 mid-backup, the job can stall indefinitely in `running`. Real server-cron
 or WP-CLI-driven scheduling is Phase 2 (JOB-02).
 
-## Automatic scheduling (Phase 2, 2026-10-20)
+## Automatic scheduling (Phase 2, 2026-10-20; day/time model, Phase 4, 2026-10-23)
 
-Settings page has an "Automatic backup schedule" dropdown: Disabled
-(default), Daily, Weekly. Backed by a real recurring WP-Cron event
-(`wpthistle_backup_scheduled_backup`) reconciled against the stored setting
-by `sync_scheduled_backup()` (`wpthistle-backup-restore.php`) — called on every
-boot and immediately after a settings save, so a schedule change takes
-effect without waiting for the next page load. 'Weekly' is a custom
-recurrence registered via the `cron_schedules` filter (WP core only
-ships hourly/twicedaily/daily).
+Settings page has a day-of-week checkbox group (Sunday-Saturday) plus a
+time-of-day field, in the site's own timezone. No days checked = disabled
+(default, same reasoning the old Disabled/Daily/Weekly dropdown's default
+had) — activating or updating the plugin never silently starts recurring
+jobs an admin didn't ask for. Checking every day reproduces the old
+"Daily" behavior; checking one day reproduces "Weekly"; any combination
+of specific days is now expressible (e.g. "Tuesday and Friday at 3am"),
+which WP-Cron's own built-in recurrences (hourly/daily/weekly-via-custom-
+interval) can't represent on their own.
+
+Because WP's `wp_schedule_event()` only understands fixed intervals, not
+calendar-style "next Tuesday or Friday at a specific time", this is
+implemented as a **self-rescheduling single event** rather than one
+recurring event: `sync_scheduled_backup()` (`wpthistle-backup-restore.php`)
+computes the next matching slot via `Scheduler::next_run()`
+(`includes/class-scheduler.php` — pure day/time math, unit-tested in
+isolation including DST transitions) and schedules exactly that one
+instant with `wp_schedule_single_event()`. `sync_scheduled_backup()` is
+called on every boot and immediately after a settings save, so a
+schedule change takes effect without waiting for the next page load. The
+settings page shows the computed "Next scheduled backup" time for
+visibility.
 
 The handler, `run_scheduled_backup()`, reuses `Job_Orchestrator::create_job()`
 as-is — including its JOB-05 stale-lock reap — so a scheduled run
 automatically clears out a genuinely abandoned previous job before
 starting, and correctly skips (no-op) rather than overlapping if a
-healthy backup is still legitimately in progress. Same WP-Cron
-pseudo-cron limitation as everything else here (only fires on site
-traffic) until JOB-02 (real server-cron) lands. Default is Disabled
-specifically so activating or updating the plugin never silently starts
-recurring jobs an admin didn't ask for. Regression test:
-`tests/e2e/run-e2e-scheduling.sh`.
+healthy backup is still legitimately in progress. Because a single event
+doesn't reschedule itself the way a recurring one does, `run_scheduled_backup()`
+always calls `sync_scheduled_backup()` again on its way out to re-arm the
+next matching slot — regardless of whether a job actually started this
+run, so one skipped slot (credentials missing, a backup already in
+progress) never silently ends automatic scheduling altogether.
+
+An existing site's old 'schedule' setting (Disabled/Daily/Weekly) is
+migrated automatically and non-destructively into the new day-list/time
+fields the first time this version runs (`migrate_schedule_to_day_time()`)
+— 'Daily' becomes every day checked; 'Weekly' reads back the
+still-registered recurring event's own anchor timestamp (if one exists)
+to preserve the admin's existing day-of-week and time rather than
+resetting to a default.
+
+Same WP-Cron pseudo-cron limitation as everything else here (only fires
+on site traffic) unless "Guaranteed scheduling" below is set up.
+Regression test: `tests/e2e/run-e2e-scheduling.sh`. Pure scheduling-math
+unit tests: `tests/unit/SchedulerTest.php`.
+
+### Guaranteed scheduling (optional, Phase 4, 2026-10-23)
+
+WP-Cron (both the pseudo-cron behavior above and the download-bundle/
+stale-lock hourly sweep) only checks for due jobs when a page loads on
+this site — a genuinely quiet site can miss a scheduled slot entirely.
+This has no code-level fix: nothing running purely as PHP inside
+WordPress can wake itself up with zero incoming requests of any kind:
+some external trigger is unavoidable. The settings page's "Guaranteed
+scheduling" panel documents this plainly and shows the site's own
+`wp-cron.php` URL for an outside scheduler to visit periodically.
+
+This is **entirely optional and happens outside this plugin's own code**:
+an admin who wants it creates a free account at a third-party cron-ping
+service (cron-job.org is suggested in the UI — free, no hard job cap,
+no SLA, roughly 4-40s jitter per its own community reporting, which is
+plenty precise for a daily/weekly backup), adds a new job there pointing
+at this site's `wp-cron.php` URL, and sets an interval (5-15 minutes
+suggested). The plugin itself makes **no outbound call to cron-job.org or
+any other third-party service** — it has no API integration, no stored
+credential, and no awareness of which (if any) service an admin chose.
+It only ever responds to a request arriving at the standard, already-
+public `wp-cron.php` URL, from that service or anyone else, exactly as
+WordPress core already does for every site. There is deliberately no
+built-in auto-registration with a shared account: that would mean
+embedding one API credential in this plugin's public source for every
+install to share, and a leaked credential (trivial to find in open-
+source code) would expose every other install's own schedule to that
+same key. A per-site, admin-owned account carries none of that risk.
+
+To remove it: delete the job on whichever service was used. There is
+nothing on this plugin's side to undo — the plugin was never aware the
+job existed.
 
 ## Retention (Phase 2, 2026-10-20)
 
@@ -566,6 +626,43 @@ trigger a real outbound request on every admin page load. Regression
 test: `tests/e2e/run-e2e-update-checker.sh` (runs against the real
 public GitHub API for the no-release-yet case, and against a seeded
 transient for the offer/no-offer logic itself).
+
+### Manual install/reinstall and the duplicate-folder guard
+
+Someone installing by hand via Upload Plugin (common before this
+plugin's first tagged release, or anyone re-installing a build outside
+the update-checker path above) can hit a real WordPress footgun: if the
+plugin is already installed and you upload a zip again without using
+WordPress's "Replace current with uploaded" option, or without deleting
+the existing folder first, WordPress extracts into a second folder
+(`wpthistle-backup-restore-1`, `-2`, ...) instead of overwriting. That
+can leave two entries in the Plugins list, one of them pointing at a
+partially-extracted main file ("Plugin file does not exist" on
+Activate), or — worse — both genuinely active at once.
+
+Two active copies sharing the same plugin header would otherwise be a
+hard PHP fatal (`Cannot redeclare function ...`) the moment WordPress
+`include_once`s the second folder's main file, since both declare the
+identical functions/classes. `wpthistle-backup-restore.php` guards
+against this directly: a constant (`WPTHISTLE_BACKUP_RESTORE_BOOTSTRAPPED`)
+is defined the first time the file loads, and everything else in the
+file — every function, class use, and hook registration — sits inside
+an `if ( true ) { ... }` wrapper purely so those declarations are bound
+at runtime rather than at PHP's compile-time early-binding, which would
+otherwise happen before the guard's `return` ever got a chance to run.
+A second load sees the constant already defined, registers a single
+admin notice naming the conflict, and returns immediately — no fatal,
+no duplicate cron registration, no duplicate schema install. Verified
+directly (not just reasoned through) by requiring the file twice in
+the same PHP process and confirming no redeclaration error and exactly
+one new hook registration on the second load.
+
+This only prevents the crash/double-registration once a duplicate
+folder exists — it doesn't stop WordPress from creating the duplicate
+folder in the first place. See the Installation section of readme.txt
+for how to avoid that: always use "Replace current with uploaded" when
+one's offered, or delete the old folder via FTP/file manager before
+uploading again.
 
 ## Disk space
 

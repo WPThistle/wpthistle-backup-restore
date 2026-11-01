@@ -183,6 +183,16 @@ class Admin {
 					<?php endforeach; ?>
 				</div>
 			<?php endif; ?>
+
+			<p class="description" style="margin-top:24px;">
+				<?php
+				printf(
+					/* translators: %s: "Buy me a coffee" link. */
+					esc_html__( 'Built by a human, assembled by AI, running on coffee ☕ -- if WPThistle saved your bacon, the bots would not say no to a refill. %s', 'wpthistle-backup-restore' ),
+					'<a href="https://buymeacoffee.com/itsmnlop" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+				);
+				?>
+			</p>
 		</div>
 		<?php
 	}
@@ -270,15 +280,28 @@ class Admin {
 			'app_password'   => isset( $_POST['app_password'] ) ? wp_unslash( $_POST['app_password'] ) : '',
 			'remote_folder'  => isset( $_POST['remote_folder'] ) ? wp_unslash( $_POST['remote_folder'] ) : '',
 			'ca_bundle_path' => isset( $_POST['ca_bundle_path'] ) ? wp_unslash( $_POST['ca_bundle_path'] ) : '',
-			'schedule'       => isset( $_POST['schedule'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule'] ) ) : 'disabled',
+			// Phase 4 (day/time scheduling): schedule_days arrives as a JSON-encoded
+			// array of ints (0=Sunday..6=Saturday) from the checkbox group below --
+			// Settings::save() re-validates/clamps every element regardless.
+			'schedule_days'  => isset( $_POST['schedule_days'] ) ? (array) json_decode( sanitize_text_field( wp_unslash( $_POST['schedule_days'] ) ), true ) : array(),
+			// Phase 6 (backup plan dropdown): replaces the standalone
+			// retention_tiered_enabled checkbox -- Settings::save() now
+			// derives that flag from schedule_mode itself.
+			'schedule_mode'     => isset( $_POST['schedule_mode'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule_mode'] ) ) : 'scheduled',
+			'schedule_cadence'  => isset( $_POST['schedule_cadence'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule_cadence'] ) ) : 'daily',
+			'schedule_day_of_month' => isset( $_POST['schedule_day_of_month'] ) ? sanitize_text_field( wp_unslash( $_POST['schedule_day_of_month'] ) ) : 1,
 			'retention_count' => isset( $_POST['retention_count'] ) ? (int) $_POST['retention_count'] : 0,
+			'retention_daily'   => isset( $_POST['retention_daily'] ) ? (int) $_POST['retention_daily'] : Settings::DEFAULT_RETENTION_DAILY,
+			'retention_weekly'  => isset( $_POST['retention_weekly'] ) ? (int) $_POST['retention_weekly'] : Settings::DEFAULT_RETENTION_WEEKLY,
+			'retention_monthly' => isset( $_POST['retention_monthly'] ) ? (int) $_POST['retention_monthly'] : Settings::DEFAULT_RETENTION_MONTHLY,
 			'incremental_enabled' => isset( $_POST['incremental_enabled'] ) ? ! empty( $_POST['incremental_enabled'] ) : false,
 		);
 		$result = Settings::save( $input );
 		if ( $result['ok'] ) {
-			// Phase 2 (scheduling): apply a schedule change immediately
-			// rather than waiting for the next page load to reconcile it.
-			sync_scheduled_backup();
+			// Phase 5/6 (day-based trigger, backup-plan dropdown): apply
+			// a schedule change immediately rather than waiting for the
+			// next page load to reconcile it.
+			maybe_run_scheduled_backup();
 			wp_send_json_success( array( 'message' => __( 'Settings saved.', 'wpthistle-backup-restore' ) ) );
 		} else {
 			wp_send_json_error( array( 'message' => __( 'Please fix the errors below.', 'wpthistle-backup-restore' ), 'errors' => $result['errors'] ) );
@@ -587,6 +610,58 @@ class Admin {
 		);
 	}
 
+	/**
+	 * Phase 5: a plain-English "did my backup actually run" answer,
+	 * right on the settings page -- no WP-CLI, no SQL, no CLI of any
+	 * kind needed by an end user ever again for this. Against
+	 * Job_Store::get_latest() (any outcome), not get_latest_verified()
+	 * (success only) -- the whole point is surfacing a stuck or failed
+	 * backup, which a "last verified" line can never show by its own
+	 * nature (there is no later verified row to point at while one is
+	 * stuck).
+	 */
+	private function describe_latest_job_status(): array {
+		$job = Job_Store::get_latest();
+		if ( null === $job ) {
+			return array( 'class' => 'neutral', 'text' => __( 'No backup yet.', 'wpthistle-backup-restore' ) );
+		}
+		$status = $job['status'] ?? '';
+		if ( 'verified' === $status ) {
+			return array(
+				'class' => 'ok',
+				/* translators: %s: UTC timestamp. */
+				'text'  => sprintf( __( 'Last backup: succeeded at %s UTC.', 'wpthistle-backup-restore' ), $job['updated_at'] ),
+			);
+		}
+		if ( 'failed' === $status ) {
+			return array(
+				'class' => 'error',
+				/* translators: %s: error message. */
+				'text'  => sprintf( __( 'Last backup: failed — %s', 'wpthistle-backup-restore' ), $job['error'] ?: __( '(no error message recorded)', 'wpthistle-backup-restore' ) ),
+			);
+		}
+		if ( in_array( $status, array( 'queued', 'running', 'uploaded-unverified' ), true ) ) {
+			// Job_Orchestrator::STALE_LOCK_SECONDS is the same threshold
+			// the automatic stale-lock reaper itself uses to decide
+			// "abandoned, not just slow" -- reusing it here means this
+			// line and the reaper's own eventual action always agree.
+			$age = time() - strtotime( $job['updated_at'] . ' UTC' );
+			if ( $age < Job_Orchestrator::STALE_LOCK_SECONDS ) {
+				return array(
+					'class' => 'warn',
+					/* translators: %s: step name, e.g. "export_files". */
+					'text'  => sprintf( __( 'Last backup: currently running (step: %s).', 'wpthistle-backup-restore' ), $job['step'] ?? '?' ),
+				);
+			}
+			return array(
+				'class' => 'error',
+				/* translators: 1: start time, 2: last-progress time, both UTC. */
+				'text'  => sprintf( __( 'Last backup: stalled — started at %1$s UTC, no progress since %2$s UTC. It will be automatically recovered shortly, or use Cancel / Reset Stuck Job below.', 'wpthistle-backup-restore' ), $job['created_at'], $job['updated_at'] ),
+			);
+		}
+		return array( 'class' => 'neutral', 'text' => __( 'Last backup: unknown status.', 'wpthistle-backup-restore' ) );
+	}
+
 	public function render_page(): void {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
@@ -609,9 +684,31 @@ class Admin {
 		// Surfaced here instead; cleared automatically the next time
 		// pruning succeeds (Job_Orchestrator::maybe_prune_old_backups()).
 		$retention_error = get_option( Job_Orchestrator::RETENTION_ERROR_OPTION, '' );
+		$latest_job_status = $this->describe_latest_job_status();
+		// Phase 4 (day-based scheduling): PHP DateTime's own 'w'
+		// convention (0=Sunday..6=Saturday), matching
+		// Daily_Trigger::is_due_today()'s $days.
+		$weekday_labels = array(
+			0 => __( 'Sun', 'wpthistle-backup-restore' ),
+			1 => __( 'Mon', 'wpthistle-backup-restore' ),
+			2 => __( 'Tue', 'wpthistle-backup-restore' ),
+			3 => __( 'Wed', 'wpthistle-backup-restore' ),
+			4 => __( 'Thu', 'wpthistle-backup-restore' ),
+			5 => __( 'Fri', 'wpthistle-backup-restore' ),
+			6 => __( 'Sat', 'wpthistle-backup-restore' ),
+		);
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'WPThistle Backup and Restore', 'wpthistle-backup-restore' ); ?></h1>
+
+			<?php
+			$status_colors = array( 'ok' => '#46b450', 'warn' => '#ffb900', 'error' => '#dc3232', 'neutral' => '#787c82' );
+			$dot_color = $status_colors[ $latest_job_status['class'] ] ?? $status_colors['neutral'];
+			?>
+			<p style="display:flex;align-items:center;gap:6px;">
+				<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:<?php echo esc_attr( $dot_color ); ?>;"></span>
+				<strong><?php echo esc_html( $latest_job_status['text'] ); ?></strong>
+			</p>
 
 			<?php if ( $retention_error ) : ?>
 				<div class="notice notice-warning">
@@ -668,21 +765,72 @@ class Admin {
 					</td>
 				</tr>
 				<tr>
-					<th><label for="wpthistle_backup_schedule"><?php esc_html_e( 'Automatic backup schedule', 'wpthistle-backup-restore' ); ?></label></th>
+					<th><label for="wpthistle_backup_schedule_mode"><?php esc_html_e( 'Backup plan', 'wpthistle-backup-restore' ); ?></label></th>
 					<td>
-						<select id="wpthistle_backup_schedule">
-							<option value="disabled" <?php selected( $settings['schedule'], 'disabled' ); ?>><?php esc_html_e( 'Disabled — manual only', 'wpthistle-backup-restore' ); ?></option>
-							<option value="daily" <?php selected( $settings['schedule'], 'daily' ); ?>><?php esc_html_e( 'Daily', 'wpthistle-backup-restore' ); ?></option>
-							<option value="weekly" <?php selected( $settings['schedule'], 'weekly' ); ?>><?php esc_html_e( 'Weekly', 'wpthistle-backup-restore' ); ?></option>
+						<select id="wpthistle_backup_schedule_mode">
+							<option value="scheduled" <?php selected( $settings['schedule_mode'], 'scheduled' ); ?>><?php esc_html_e( 'Scheduled', 'wpthistle-backup-restore' ); ?></option>
+							<option value="tiered" <?php selected( $settings['schedule_mode'], 'tiered' ); ?>><?php esc_html_e( 'Tiered', 'wpthistle-backup-restore' ); ?></option>
 						</select>
-						<p class="description"><?php esc_html_e( 'Relies on WP-Cron, same as the manual backup fallback — only fires on site traffic (see Operations docs). Skips a run rather than overlapping if a backup is still genuinely in progress.', 'wpthistle-backup-restore' ); ?></p>
+						<p class="description" id="wpthistle_backup_schedule_mode_desc_scheduled"><?php esc_html_e( 'I choose which day(s) (or which day of the month), and a flat number of backups is kept.', 'wpthistle-backup-restore' ); ?></p>
+						<p class="description" id="wpthistle_backup_schedule_mode_desc_tiered"><?php esc_html_e( 'Backs up every day -- no day picker, since its "daily" tier would not mean daily otherwise -- and keeps a GFS-style rolling set instead: so many most-recent days, so many most-recent weeks, so many most-recent months.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
-				<tr>
+				<tr id="wpthistle_backup_cadence_row">
+					<th><label for="wpthistle_backup_schedule_cadence"><?php esc_html_e( 'Cadence', 'wpthistle-backup-restore' ); ?></label></th>
+					<td>
+						<select id="wpthistle_backup_schedule_cadence">
+							<option value="daily" <?php selected( $settings['schedule_cadence'], 'daily' ); ?>><?php esc_html_e( 'Daily', 'wpthistle-backup-restore' ); ?></option>
+							<option value="monthly" <?php selected( $settings['schedule_cadence'], 'monthly' ); ?>><?php esc_html_e( 'Monthly', 'wpthistle-backup-restore' ); ?></option>
+						</select>
+						<p class="description" id="wpthistle_backup_schedule_cadence_desc_daily"><?php esc_html_e( 'Choose day(s) of the week below.', 'wpthistle-backup-restore' ); ?></p>
+						<p class="description" id="wpthistle_backup_schedule_cadence_desc_monthly"><?php esc_html_e( 'Choose a day of the month below.', 'wpthistle-backup-restore' ); ?></p>
+					</td>
+				</tr>
+				<tr id="wpthistle_backup_daily_row">
+					<th><?php esc_html_e( 'Run on these days', 'wpthistle-backup-restore' ); ?></th>
+					<td>
+						<fieldset>
+							<legend class="screen-reader-text"><?php esc_html_e( 'Run on these days', 'wpthistle-backup-restore' ); ?></legend>
+							<?php foreach ( $weekday_labels as $day_index => $day_label ) : ?>
+								<label style="margin-right:10px;"><input type="checkbox" class="wpthistle_backup_schedule_day" value="<?php echo esc_attr( (string) $day_index ); ?>" <?php checked( in_array( $day_index, $settings['schedule_days'], true ) ); ?>> <?php echo esc_html( $day_label ); ?></label>
+							<?php endforeach; ?>
+						</fieldset>
+						<p class="description"><?php esc_html_e( 'No days checked = disabled (manual only). On a selected day, the backup runs on whichever request happens to reach this site first that day -- a page view, a crawler, even this site\'s own hourly housekeeping check -- rather than at one exact time, so a genuinely quiet site never misses a narrow window. Skips a run rather than overlapping if a backup is still genuinely in progress -- it simply waits for the next selected day.', 'wpthistle-backup-restore' ); ?></p>
+					</td>
+				</tr>
+				<tr id="wpthistle_backup_monthly_row">
+					<th><label for="wpthistle_backup_schedule_day_of_month"><?php esc_html_e( 'Run on this day of the month', 'wpthistle-backup-restore' ); ?></label></th>
+					<td>
+						<select id="wpthistle_backup_schedule_day_of_month">
+							<?php for ( $d = 1; $d <= 31; $d++ ) : ?>
+								<option value="<?php echo esc_attr( (string) $d ); ?>" <?php selected( $settings['schedule_day_of_month'], $d ); ?>><?php echo esc_html( (string) $d ); ?></option>
+							<?php endfor; ?>
+							<option value="last" <?php selected( $settings['schedule_day_of_month'], 'last' ); ?>><?php esc_html_e( 'Last Day of the Month', 'wpthistle-backup-restore' ); ?></option>
+						</select>
+						<p class="description"><?php esc_html_e( 'A fixed day (e.g. 31) simply has no match in a shorter month -- that month is skipped entirely. Choose "Last Day of the Month" instead if you always want one, regardless of length.', 'wpthistle-backup-restore' ); ?></p>
+					</td>
+				</tr>
+				<tr id="wpthistle_backup_retention_count_row">
 					<th><label for="wpthistle_backup_retention"><?php esc_html_e( 'Keep last N backups', 'wpthistle-backup-restore' ); ?></label></th>
 					<td>
 						<input type="number" id="wpthistle_backup_retention" min="0" step="1" value="<?php echo esc_attr( (string) $settings['retention_count'] ); ?>" class="small-text">
 						<p class="description"><?php esc_html_e( '0 = keep every backup forever (default). A positive number deletes the oldest backup folder(s) on Nextcloud right after each new backup verifies successfully, once more than that many exist. This permanently deletes data — only increase from 0 once you are comfortable with the number chosen.', 'wpthistle-backup-restore' ); ?></p>
+					</td>
+				</tr>
+				<tr id="wpthistle_backup_tiered_row">
+					<th><?php esc_html_e( 'Tiered retention', 'wpthistle-backup-restore' ); ?></th>
+					<td>
+						<p>
+							<label for="wpthistle_backup_retention_daily"><?php esc_html_e( 'Keep daily for', 'wpthistle-backup-restore' ); ?></label>
+							<input type="number" id="wpthistle_backup_retention_daily" min="0" step="1" value="<?php echo esc_attr( (string) $settings['retention_daily'] ); ?>" class="small-text"> <?php esc_html_e( 'day(s)', 'wpthistle-backup-restore' ); ?>
+							&nbsp;&nbsp;
+							<label for="wpthistle_backup_retention_weekly"><?php esc_html_e( 'keep weekly for', 'wpthistle-backup-restore' ); ?></label>
+							<input type="number" id="wpthistle_backup_retention_weekly" min="0" step="1" value="<?php echo esc_attr( (string) $settings['retention_weekly'] ); ?>" class="small-text"> <?php esc_html_e( 'week(s)', 'wpthistle-backup-restore' ); ?>
+							&nbsp;&nbsp;
+							<label for="wpthistle_backup_retention_monthly"><?php esc_html_e( 'keep monthly for', 'wpthistle-backup-restore' ); ?></label>
+							<input type="number" id="wpthistle_backup_retention_monthly" min="0" step="1" value="<?php echo esc_attr( (string) $settings['retention_monthly'] ); ?>" class="small-text"> <?php esc_html_e( 'month(s)', 'wpthistle-backup-restore' ); ?>
+						</p>
+						<p class="description"><?php esc_html_e( 'Keeps one backup per day for the daily window, one per calendar week for the weekly window, and one per calendar month for the monthly window; a backup can count toward more than one window at once. There is no fixed "day of week" or "day of month" to miss -- whichever backup actually exists in a given day/week/month represents it, so a quiet day or a short month is never a problem.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
 				<tr>
@@ -698,6 +846,21 @@ class Admin {
 				<button type="button" class="button" id="wpthistle_backup_test"><?php esc_html_e( 'Test Connection', 'wpthistle-backup-restore' ); ?></button>
 			</p>
 			<div id="wpthistle_backup_settings_result" role="status"></div>
+
+			<h2><?php esc_html_e( 'Guaranteed scheduling (optional, advanced)', 'wpthistle-backup-restore' ); ?></h2>
+			<p class="description">
+				<?php esc_html_e( 'The schedule above runs on whichever request reaches this site first on a selected day, and now also self-advances once started (no longer needing further site traffic to finish) -- in practice this covers almost every site. The one remaining edge case: a site with truly zero requests of any kind for an entire selected day. For that, an outside scheduler can visit this URL periodically instead:', 'wpthistle-backup-restore' ); ?>
+			</p>
+			<p><input type="text" readonly onclick="this.select();" value="<?php echo esc_url( site_url( 'wp-cron.php' ) ); ?>" class="large-text code"></p>
+			<p class="description">
+				<?php
+				printf(
+					/* translators: %s: link to cron-job.org. */
+					esc_html__( 'This is entirely optional and happens outside this plugin: create a free account at %s, add a new cron job, paste the URL above as its target, and set it to run every 5-15 minutes. This plugin never contacts cron-job.org or any other outside service itself -- it only reads a request when one arrives at the URL above, from that service or anywhere else. Nothing is sent anywhere unless you set this up yourself, and there is nothing to undo here if you do: to stop, just delete the job on whichever service you used.', 'wpthistle-backup-restore' ),
+					'<a href="https://cron-job.org/en/" target="_blank" rel="noopener noreferrer">cron-job.org</a>'
+				);
+				?>
+			</p>
 
 			<h2><?php esc_html_e( 'Manual backup', 'wpthistle-backup-restore' ); ?></h2>
 			<p>
@@ -759,6 +922,24 @@ class Admin {
 					.then(function(r){ return r.json(); });
 			}
 
+			function updateScheduleVisibility() {
+				var mode = document.getElementById('wpthistle_backup_schedule_mode').value;
+				var cadence = document.getElementById('wpthistle_backup_schedule_cadence').value;
+				var scheduled = (mode === 'scheduled');
+				document.getElementById('wpthistle_backup_cadence_row').style.display = scheduled ? '' : 'none';
+				document.getElementById('wpthistle_backup_daily_row').style.display = (scheduled && cadence === 'daily') ? '' : 'none';
+				document.getElementById('wpthistle_backup_monthly_row').style.display = (scheduled && cadence === 'monthly') ? '' : 'none';
+				document.getElementById('wpthistle_backup_retention_count_row').style.display = scheduled ? '' : 'none';
+				document.getElementById('wpthistle_backup_tiered_row').style.display = scheduled ? 'none' : '';
+				document.getElementById('wpthistle_backup_schedule_mode_desc_scheduled').style.display = scheduled ? '' : 'none';
+				document.getElementById('wpthistle_backup_schedule_mode_desc_tiered').style.display = scheduled ? 'none' : '';
+				document.getElementById('wpthistle_backup_schedule_cadence_desc_daily').style.display = (cadence === 'daily') ? '' : 'none';
+				document.getElementById('wpthistle_backup_schedule_cadence_desc_monthly').style.display = (cadence === 'monthly') ? '' : 'none';
+			}
+			document.getElementById('wpthistle_backup_schedule_mode').addEventListener('change', updateScheduleVisibility);
+			document.getElementById('wpthistle_backup_schedule_cadence').addEventListener('change', updateScheduleVisibility);
+			updateScheduleVisibility();
+
 			document.getElementById('wpthistle_backup_save').addEventListener('click', function(){
 				post('wpthistle_backup_save_settings', {
 					backend: document.getElementById('wpthistle_backup_backend').value,
@@ -767,8 +948,14 @@ class Admin {
 					app_password: document.getElementById('wpthistle_backup_pw').value,
 					remote_folder: document.getElementById('wpthistle_backup_folder').value,
 					ca_bundle_path: document.getElementById('wpthistle_backup_ca').value,
-					schedule: document.getElementById('wpthistle_backup_schedule').value,
+					schedule_mode: document.getElementById('wpthistle_backup_schedule_mode').value,
+					schedule_cadence: document.getElementById('wpthistle_backup_schedule_cadence').value,
+					schedule_day_of_month: document.getElementById('wpthistle_backup_schedule_day_of_month').value,
+					schedule_days: JSON.stringify(Array.prototype.slice.call(document.querySelectorAll('.wpthistle_backup_schedule_day:checked')).map(function(el){ return parseInt(el.value, 10); })),
 					retention_count: document.getElementById('wpthistle_backup_retention').value,
+					retention_daily: document.getElementById('wpthistle_backup_retention_daily').value,
+					retention_weekly: document.getElementById('wpthistle_backup_retention_weekly').value,
+					retention_monthly: document.getElementById('wpthistle_backup_retention_monthly').value,
 					incremental_enabled: document.getElementById('wpthistle_backup_incremental').checked ? '1' : ''
 				}).then(function(res){
 					document.getElementById('wpthistle_backup_settings_result').textContent = res.data.message;

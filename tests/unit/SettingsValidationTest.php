@@ -36,30 +36,159 @@ function test_rejects_missing_username() {
 	wpguard_assert( false === $result['ok'], 'missing username must be rejected' );
 }
 
-// Phase 2 (scheduling). The admin UI is always a <select> with a fixed
-// option list, so these cover: the field is omitted entirely (an older
-// stored option, or a non-UI caller), a valid choice, and tampering /
-// a future form mismatch -- none of these should ever hard-fail a save,
-// since scheduling is optional and must degrade to the safe default.
+// Phase 4 (day/time scheduling). The admin UI is always a fixed
+// checkbox group (0-6) plus an <input type=time>, so these cover: both
+// fields omitted entirely (an older stored option, or a non-UI caller),
+// valid values, and tampering / a future form mismatch -- none of these
+// should ever hard-fail a save, since scheduling is optional and must
+// degrade to the safe (disabled) default.
 function test_schedule_defaults_to_disabled_when_missing() {
 	$GLOBALS['__wpguard_test_options'] = array();
 	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw' ) );
-	wpguard_assert( true === $result['ok'], 'save without a schedule field must still succeed' );
-	wpguard_assert_equals( 'disabled', Settings::get_schedule(), 'an omitted schedule field must default to disabled' );
+	wpguard_assert( true === $result['ok'], 'save without schedule fields must still succeed' );
+	wpguard_assert_equals( array(), Settings::get_schedule_days(), 'omitted schedule_days must default to empty (disabled)' );
 }
 
-function test_accepts_valid_schedule_value() {
+function test_accepts_valid_schedule_days() {
 	$GLOBALS['__wpguard_test_options'] = array();
-	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule' => 'weekly' ) );
-	wpguard_assert( true === $result['ok'], 'a valid schedule value must be accepted' );
-	wpguard_assert_equals( 'weekly', Settings::get_schedule(), 'the valid schedule value must be stored and read back' );
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_days' => array( 2, 5 ) ) );
+	wpguard_assert( true === $result['ok'], 'valid schedule_days must be accepted' );
+	wpguard_assert_equals( array( 2, 5 ), Settings::get_schedule_days(), 'the valid schedule_days must be stored and read back, sorted' );
 }
 
-function test_rejects_unrecognized_schedule_falls_back_to_disabled() {
+function test_schedule_days_deduplicates_and_sorts() {
 	$GLOBALS['__wpguard_test_options'] = array();
-	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule' => 'hourly-or-something-not-offered' ) );
-	wpguard_assert( true === $result['ok'], 'an unrecognized schedule value must not hard-fail the whole save' );
-	wpguard_assert_equals( 'disabled', Settings::get_schedule(), 'an unrecognized schedule value must clamp to the safe default, not be stored verbatim' );
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_days' => array( 5, 1, 5, 1 ) ) );
+	wpguard_assert( true === $result['ok'], 'duplicate schedule_days must not hard-fail the save' );
+	wpguard_assert_equals( array( 1, 5 ), Settings::get_schedule_days(), 'duplicate days must be deduplicated and sorted ascending' );
+}
+
+function test_rejects_out_of_range_schedule_day_without_failing_save() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_days' => array( 1, 9, -1, 'not-a-day' ) ) );
+	wpguard_assert( true === $result['ok'], 'an out-of-range schedule_days entry must not hard-fail the whole save' );
+	wpguard_assert_equals( array( 1 ), Settings::get_schedule_days(), 'only the in-range (0-6) entries must survive' );
+}
+
+// Phase 5 (tiered retention). Off by default regardless of the numbers
+// shown/stored -- an existing install, or a fresh one that never
+// touches this section, must never start deleting backups via this
+// path. The simple retention_count field above is untouched by any of
+// this and keeps working exactly as before.
+function test_tiered_retention_defaults_to_disabled_with_prefilled_numbers() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw' ) );
+	wpguard_assert( true === $result['ok'], 'save without any tiered-retention fields must still succeed' );
+	wpguard_assert( false === Settings::get_retention_tiered_enabled(), 'tiered retention must default to disabled' );
+	wpguard_assert_equals( array( 'daily' => 7, 'weekly' => 4, 'monthly' => 12 ), Settings::get_retention_tiers(), 'the pre-filled defaults must still be 7/4/12 even while disabled' );
+}
+
+function test_accepts_valid_tiered_retention_settings() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'schedule_mode' => 'tiered', 'retention_daily' => 5, 'retention_weekly' => 2, 'retention_monthly' => 6,
+	) );
+	wpguard_assert( true === $result['ok'], 'valid tiered retention settings must be accepted' );
+	wpguard_assert( true === Settings::get_retention_tiered_enabled(), 'the enabled flag must be derived true from schedule_mode=tiered' );
+	wpguard_assert_equals( array( 'daily' => 5, 'weekly' => 2, 'monthly' => 6 ), Settings::get_retention_tiers(), 'the valid tier counts must be stored and read back' );
+}
+
+function test_tiered_retention_negative_or_non_numeric_clamps_to_zero() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'schedule_mode' => 'tiered', 'retention_daily' => -3, 'retention_weekly' => 'not-a-number', 'retention_monthly' => 9,
+	) );
+	wpguard_assert( true === $result['ok'], 'an invalid tier count must not hard-fail the whole save' );
+	wpguard_assert_equals( array( 'daily' => 0, 'weekly' => 0, 'monthly' => 9 ), Settings::get_retention_tiers(), 'negative/non-numeric tier counts must clamp to 0, valid ones pass through' );
+}
+
+// Phase 6 (backup plan dropdown): replaces the standalone
+// retention_tiered_enabled checkbox -- schedule_mode is now the single
+// control, always a fixed <select> in the admin UI, same clamp-not-fail
+// tolerance as backend/schedule above.
+function test_schedule_mode_defaults_to_scheduled_when_missing() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw' ) );
+	wpguard_assert( true === $result['ok'], 'save without a schedule_mode field must still succeed' );
+	wpguard_assert_equals( 'scheduled', Settings::get_schedule_mode(), 'an omitted schedule_mode must default to scheduled' );
+	wpguard_assert( false === Settings::get_retention_tiered_enabled(), 'the derived tiered flag must be false under the default mode' );
+}
+
+function test_schedule_mode_rejects_unrecognized_value_without_failing_save() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_mode' => 'weekly-ish' ) );
+	wpguard_assert( true === $result['ok'], 'an unrecognized schedule_mode must not hard-fail the whole save' );
+	wpguard_assert_equals( 'scheduled', Settings::get_schedule_mode(), 'an unrecognized schedule_mode must clamp to the safe default, not be stored as-is' );
+}
+
+function test_schedule_cadence_defaults_to_daily_and_accepts_monthly() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw' ) );
+	wpguard_assert( true === $result['ok'], 'save without a schedule_cadence field must still succeed' );
+	wpguard_assert_equals( 'daily', Settings::get_schedule_cadence(), 'an omitted schedule_cadence must default to daily' );
+
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_cadence' => 'monthly' ) );
+	wpguard_assert( true === $result['ok'], 'a valid schedule_cadence must be accepted' );
+	wpguard_assert_equals( 'monthly', Settings::get_schedule_cadence(), 'schedule_cadence=monthly must be stored and read back' );
+}
+
+function test_schedule_cadence_rejects_unrecognized_value_without_failing_save() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_cadence' => 'biweekly' ) );
+	wpguard_assert( true === $result['ok'], 'an unrecognized schedule_cadence must not hard-fail the whole save' );
+	wpguard_assert_equals( 'daily', Settings::get_schedule_cadence(), 'an unrecognized schedule_cadence must clamp to the safe default' );
+}
+
+function test_schedule_day_of_month_defaults_to_first_and_accepts_last() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw' ) );
+	wpguard_assert( true === $result['ok'], 'save without a schedule_day_of_month field must still succeed' );
+	wpguard_assert_equals( 1, Settings::get_schedule_day_of_month(), 'an omitted schedule_day_of_month must default to the 1st' );
+
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_day_of_month' => 'last' ) );
+	wpguard_assert( true === $result['ok'], 'schedule_day_of_month=last must be accepted' );
+	wpguard_assert_equals( 'last', Settings::get_schedule_day_of_month(), '"last" must be stored and read back as the literal string' );
+
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_day_of_month' => 17 ) );
+	wpguard_assert( true === $result['ok'], 'a valid numeric schedule_day_of_month must be accepted' );
+	wpguard_assert_equals( 17, Settings::get_schedule_day_of_month(), 'a valid day-of-month must be stored and read back' );
+}
+
+function test_schedule_day_of_month_out_of_range_clamps_to_first_without_failing_save() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'schedule_day_of_month' => 45 ) );
+	wpguard_assert( true === $result['ok'], 'an out-of-range schedule_day_of_month must not hard-fail the whole save' );
+	wpguard_assert_equals( 1, Settings::get_schedule_day_of_month(), 'an out-of-range schedule_day_of_month must clamp to the 1st' );
+}
+
+// Phase 6 migration: an install that saved under Phase 5 (standalone
+// retention_tiered_enabled checkbox, no schedule_mode key at all in the
+// stored option) must land on 'tiered' once it upgrades, not silently
+// reset to 'scheduled' and lose that explicit prior opt-in.
+function test_legacy_tiered_enabled_without_schedule_mode_migrates_to_tiered_mode() {
+	$GLOBALS['__wpguard_test_options'] = array(
+		Settings::OPTION_KEY => array(
+			'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+			'retention_tiered_enabled' => true, 'retention_daily' => 5, 'retention_weekly' => 2, 'retention_monthly' => 6,
+		),
+	);
+	wpguard_assert_equals( 'tiered', Settings::get_schedule_mode(), 'a pre-Phase-6 row with retention_tiered_enabled=true must read back as schedule_mode=tiered' );
+}
+
+function test_legacy_tiered_disabled_without_schedule_mode_migrates_to_scheduled_mode() {
+	$GLOBALS['__wpguard_test_options'] = array(
+		Settings::OPTION_KEY => array(
+			'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+			'retention_tiered_enabled' => false, 'schedule_days' => array( 2 ),
+		),
+	);
+	wpguard_assert_equals( 'scheduled', Settings::get_schedule_mode(), 'a pre-Phase-6 row with retention_tiered_enabled=false must read back as schedule_mode=scheduled' );
+	wpguard_assert_equals( array( 2 ), Settings::get_schedule_days(), 'its existing day selection must survive the migration untouched' );
 }
 
 // Phase 2 (retention). Pruning is destructive (permanently deletes
@@ -281,11 +410,23 @@ return array(
 	'test_blank_app_password_keeps_existing_value',
 	'test_rejects_missing_username',
 	'test_schedule_defaults_to_disabled_when_missing',
-	'test_accepts_valid_schedule_value',
-	'test_rejects_unrecognized_schedule_falls_back_to_disabled',
+	'test_accepts_valid_schedule_days',
+	'test_schedule_days_deduplicates_and_sorts',
+	'test_rejects_out_of_range_schedule_day_without_failing_save',
 	'test_retention_defaults_to_zero_when_missing',
 	'test_accepts_valid_retention_count',
 	'test_rejects_negative_retention_count',
+	'test_tiered_retention_defaults_to_disabled_with_prefilled_numbers',
+	'test_accepts_valid_tiered_retention_settings',
+	'test_tiered_retention_negative_or_non_numeric_clamps_to_zero',
+	'test_schedule_mode_defaults_to_scheduled_when_missing',
+	'test_schedule_mode_rejects_unrecognized_value_without_failing_save',
+	'test_schedule_cadence_defaults_to_daily_and_accepts_monthly',
+	'test_schedule_cadence_rejects_unrecognized_value_without_failing_save',
+	'test_schedule_day_of_month_defaults_to_first_and_accepts_last',
+	'test_schedule_day_of_month_out_of_range_clamps_to_first_without_failing_save',
+	'test_legacy_tiered_enabled_without_schedule_mode_migrates_to_tiered_mode',
+	'test_legacy_tiered_disabled_without_schedule_mode_migrates_to_scheduled_mode',
 	'test_incremental_defaults_to_disabled_when_missing',
 	'test_incremental_accepts_enabled',
 	'test_backend_defaults_to_nextcloud_when_missing',

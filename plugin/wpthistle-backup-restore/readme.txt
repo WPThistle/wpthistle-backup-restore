@@ -1,10 +1,11 @@
 === WPThistle Backup and Restore ===
 Contributors: itsmnlop
+Donate link: https://buymeacoffee.com/itsmnlop
 Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.0.0
+Stable tag: 2.2.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,7 +30,45 @@ A backup is never reported successful until every uploaded component has been re
 4. Click Test Connection.
 5. Click Back Up Now.
 
+**Reinstalling or manually updating via Upload Plugin:** if the plugin is already installed and you're uploading a new copy by hand (rather than via Plugins > Updates), WordPress will offer a "Replace current with uploaded" option — use it. If you instead delete and re-upload without that option, or upload more than once without removing the previous attempt first, WordPress creates a second folder (e.g. `wpthistle-backup-restore-1`) instead of overwriting, which can leave a broken or duplicate install. If you ever see two WPThistle Backup and Restore entries in your Plugins list, delete the extra folder via FTP or your host's file manager before activating either one.
+
+== Frequently Asked Questions ==
+
+= What's the actual difference between "Scheduled" and "Tiered"? =
+
+Scheduled only ever attempts a backup on the day(s) you pick -- on every
+other day, nothing runs at all. Tiered has no day picker because it
+attempts a backup every single day, with no exceptions; the daily/
+weekly/monthly keep-counts only control how many of those get kept
+afterward, not whether that day's backup happens in the first place.
+
+This matters most if you set Tiered's "keep daily" count to 0: backups
+still run every day (full bandwidth/server load/Nextcloud API cost each
+time), and pruning simply deletes most of them again right away, keeping
+only whichever one represents the current week/month. If you only want
+a backup on specific day(s), and never want the server to do backup work
+on the others, use Scheduled instead -- Tiered will always cost more
+than that, even configured down to the same number of backups kept.
+
+= I set all three Tiered counts (daily/weekly/monthly) to 0 -- does that delete everything? =
+
+No. Same "0 = keep every backup forever" rule the simple Scheduled
+keep-last-N count has always had -- with every Tiered count at 0,
+pruning does nothing at all rather than being read as "keep none."
+
 == Changelog ==
+
+= 2.2.2 =
+Docs only: added an FAQ section explaining the real difference between Scheduled and Tiered (Tiered backs up every day regardless of its keep-counts, including a "keep daily" of 0 -- Scheduled only ever runs on the day(s) picked). Lives on the plugin's "View details" page, not the Settings screen, so it's there for whoever wants it without adding more text to the settings UI itself.
+
+= 2.2.1 =
+UI fix: the Backup Plan and Cadence dropdowns' option text was long enough to get clipped in the dropdown box itself. Options are now short ("Scheduled"/"Tiered", "Daily"/"Monthly"); the fuller explanation moved to description text below the dropdown that switches to match whichever option is currently selected.
+
+= 2.2.0 =
+Backup plan is now one dropdown instead of two settings that could silently contradict each other (picking specific days of the week while tiered retention was also on, which made the "daily" tier not actually daily). Choose **Scheduled** -- pick a cadence (daily day-of-week, or now also monthly day-of-month, including a "Last Day of the Month" option for shorter months) plus a simple keep-last-N count -- or **Tiered** -- backs up every day, no day picker, GFS-style daily/weekly/monthly keep-counts. Existing installs carry their current setup over automatically (day-of-week + keep-last-N users land on Scheduled/Daily with their days intact; anyone who had the old standalone tiered-retention checkbox on lands on Tiered) -- nothing changes behavior on upgrade without being resaved.
+
+= 2.1.0 =
+Scheduling and retention overhaul. Replaces the old exact-time (HH:MM) single-event schedule with a day-based trigger: the first site visit (of any kind) on a selected day starts that day's backup, whichever day it is, no missed-instant window to depend on. Fixes the real cause of a backup silently stalling overnight with no one around to finish it: a job now advances itself step-by-step via a self-triggered background request (the same mechanism WordPress core uses to wake up its own cron) instead of waiting on a visitor's browser to keep polling it forward. Adds a plain-English backup status readout right on the settings page (succeeded / running / stalled / failed) — no CLI or database access ever required to check on a backup. Adds optional tiered (daily/weekly/monthly) retention using the same bucket-and-prune approach as restic/Borg, off by default. Security audit of the new self-advance endpoint in progress; see STATUS.md once complete.
 
 = 2.0.0 =
 Renamed from "WPGuard Nextcloud Backup" to "WPThistle Backup and Restore" — the plugin outgrew its old name once it covered ownCloud, OpenCloud, and zero-cloud local downloads, and "WPGuard" turned out to already be in active use elsewhere in the WordPress security space. This is a breaking change from WordPress's point of view: a new plugin slug, so it shows up as a separate install. Your settings, backup history, and site identity carry over automatically the first time this version activates — deactivate the old plugin first (do not delete it yet), activate this one, confirm everything looks right, then delete the old plugin's files. See docs/releasing.md and STATUS.md for the full migration detail and what was checked before shipping this.

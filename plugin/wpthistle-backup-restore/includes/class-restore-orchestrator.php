@@ -551,7 +551,7 @@ class Restore_Orchestrator {
 		// backup plugin entirely would not.
 		$cp = null !== $job ? $job['checkpoint'] : array();
 		unset( $cp['captured_options'] );
-		Job_Store::update( $job_id, array( 'status' => 'failed', 'error' => $safe, 'checkpoint' => $cp ) );
+		Job_Store::update( $job_id, array( 'status' => 'failed', 'error' => $safe, 'checkpoint' => $cp, 'advance_token' => null ) );
 		return Job_Store::get( $job_id );
 	}
 
@@ -1586,7 +1586,7 @@ class Restore_Orchestrator {
 		// export now correctly skips, but mysqldump/phpMyAdmin/a different
 		// backup plugin would not) doesn't keep holding it indefinitely.
 		unset( $cp['captured_options'] );
-		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done', 'checkpoint' => $cp ) );
+		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done', 'checkpoint' => $cp, 'advance_token' => null ) );
 		return Job_Store::get( $job_id );
 	}
 }

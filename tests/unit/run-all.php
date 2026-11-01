@@ -12,7 +12,7 @@ require __DIR__ . '/wp-shim.php';
 require __DIR__ . '/assert.php';
 
 $plugin_includes = dirname( __DIR__, 2 ) . '/plugin/wpthistle-backup-restore/includes/';
-foreach ( array( 'class-archive-writer.php', 'class-logger.php', 'class-manifest.php', 'class-ca-bundle.php', 'class-settings.php', 'class-update-checker.php', 'class-nextcloud-client.php', 'class-job-orchestrator.php', 'class-db-exporter.php', 'class-db-migrator.php', 'class-restore-orchestrator.php' ) as $f ) {
+foreach ( array( 'class-archive-writer.php', 'class-logger.php', 'class-manifest.php', 'class-ca-bundle.php', 'class-settings.php', 'class-daily-trigger.php', 'class-monthly-trigger.php', 'class-update-checker.php', 'class-nextcloud-client.php', 'class-retention.php', 'class-job-orchestrator.php', 'class-db-exporter.php', 'class-db-migrator.php', 'class-restore-orchestrator.php' ) as $f ) {
 	require $plugin_includes . $f;
 }
 

@@ -92,6 +92,46 @@ end.
 unattended runs now exist (automatic stale-lock recovery, automatic
 scheduling) — see T17.
 
+## T25 — Phase 5 self-chain advance (unauthenticated loopback endpoint)
+
+A job (backup or restore) now advances itself via a non-blocking loopback
+HTTP request it fires at its own site (`self_chain_advance()` /
+`ajax_self_advance()` in `wpthistle-backup-restore.php`), the same
+technique WP core's own `spawn_cron()` uses -- needed because a quiet,
+visitor-free site overnight has nothing else to re-trigger a stalled
+multi-step job. This necessarily registers a `wp_ajax_nopriv_*` handler,
+reachable with no WordPress auth at all.
+
+Vex audit, 2026-11-01, no CRITICAL/HIGH. Findings and disposition:
+
+- **MEDIUM-1, no rate limiting on the unauthenticated endpoint.** Accepted
+  as a server-level concern, not a plugin-code fix (WordPress is fully
+  bootstrapped before any plugin code runs, so the plugin cannot gate
+  request volume ahead of that cost). Documented here as a residual risk;
+  an operator wanting to close it should add a rate-limit rule (nginx
+  `limit_req`, a Cloudflare rate rule, or equivalent) keyed on the
+  `action=wpthistle_backup_self_advance` request.
+- **LOW-1, `advance_token` stayed valid forever on a dead (verified/failed)
+  job.** Fixed: every terminal-transition `Job_Store::update()` call in
+  both `Job_Orchestrator` and `Restore_Orchestrator` now also clears
+  `advance_token` to `null`.
+- **LOW-2, an external caller holding a valid token could bypass the
+  `WPTHISTLE_BACKUP_SELF_ADVANCE_MAX_CHAIN` cap by calling
+  `ajax_self_advance()` directly** rather than going through
+  `self_chain_advance()`'s own counter. Fixed: `ajax_self_advance()` now
+  checks the job's terminal status and chain-count cap itself before
+  calling `cron_advance()`.
+
+Passed checks, confirmed by Vex (not merely asserted): token generation is
+`random_bytes(32)` (256-bit, CSPRNG, not derived from `job_id` or
+timestamps); the comparison is `hash_equals()` with no prefix/substring
+check ahead of it; the three failure paths (unknown job, no token, wrong
+token) are genuinely indistinguishable (same 403, empty body); the token
+is never exposed to the logged-in admin's browser (`public_job_view()`'s
+explicit field allowlist excludes it); the loopback target is
+`admin_url('admin-ajax.php')` or a developer-only constant/filter override,
+never user-controlled (no SSRF).
+
 ## Residual risks accepted for MVP, with owner-visible documentation
 
 - App password at rest in `wp_options` (ADR 0002) unless the operator uses

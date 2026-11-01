@@ -154,7 +154,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Activating plugin on source site..."
-Wp-Source plugin activate wpguard-nc-backup
+Wp-Source plugin activate wpthistle-backup-restore
 if ($LASTEXITCODE -ne 0) { throw "plugin activation failed" }
 
 Write-Host "Seeding fixture content on source site..."

@@ -358,7 +358,7 @@ class Job_Orchestrator {
 	private static function fail( string $job_id, string $step, string $message ): array {
 		$safe = self::logger()->redact( $message );
 		self::log( $job_id, $step, 'error', $safe );
-		Job_Store::update( $job_id, array( 'status' => 'failed', 'error' => $safe ) );
+		Job_Store::update( $job_id, array( 'status' => 'failed', 'error' => $safe, 'advance_token' => null ) );
 		$job = Job_Store::get( $job_id );
 		// security audit finding L-01: cleanup_tmp() previously only ran on the success
 		// path, leaving partial database/archive files under
@@ -1150,7 +1150,7 @@ class Job_Orchestrator {
 		// serve no further purpose.
 		self::cleanup_tmp( $tmp );
 		self::log( $job_id, 'bundle_local', 'info', sprintf( 'Downloadable backup bundle ready (%s).', size_format( $cp['download_bundle_bytes'] ) ) );
-		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done', 'checkpoint' => $cp ) );
+		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done', 'checkpoint' => $cp, 'advance_token' => null ) );
 		// Deliberately NOT calling Backup_Chain::record_result() here --
 		// this job's bytes were never uploaded anywhere persistent,
 		// so recording it as the chain's new parent would let a future
@@ -1185,7 +1185,7 @@ class Job_Orchestrator {
 		self::upload_diagnostic_log( $job['backup_id'], $job['log'] ?? array() );
 		self::cleanup_tmp( $tmp );
 		self::log( $job_id, 'finalize', 'info', 'Backup verified and complete.' );
-		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done' ) );
+		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done', 'advance_token' => null ) );
 		// Phase 2 (incremental backups): only ever advances/resets local
 		// chain state once a job is already verified -- a failed job
 		// must never affect what the next job decides, same discipline
@@ -1219,6 +1219,15 @@ class Job_Orchestrator {
 	 * clears it the moment pruning next succeeds.
 	 */
 	private static function maybe_prune_old_backups( string $job_id, Nextcloud_Client $client ): void {
+		// Phase 5: tiered (daily/weekly/monthly) retention and the
+		// original flat keep-last-N scheme are mutually exclusive --
+		// tiered wins when explicitly enabled (opt-in, off by default,
+		// see Settings::get_retention_tiered_enabled()'s docblock),
+		// otherwise this behaves exactly as it always has.
+		if ( Settings::get_retention_tiered_enabled() ) {
+			self::maybe_prune_old_backups_tiered( $job_id, $client );
+			return;
+		}
 		$keep = Settings::get_retention_count();
 		if ( $keep <= 0 ) {
 			return;
@@ -1226,6 +1235,33 @@ class Job_Orchestrator {
 		try {
 			$parent_rel = $client->relative_path( Settings::get_site_id() . '/backups' );
 			$result = Retention::prune( $client, $parent_rel, $keep );
+			if ( is_wp_error( $result ) ) {
+				$message = self::logger()->redact( $result->get_error_message() );
+				self::log( $job_id, 'finalize', 'warning', 'Retention pruning did not fully complete: ' . $message );
+				update_option( self::RETENTION_ERROR_OPTION, $message, false );
+				return;
+			}
+			update_option( self::RETENTION_ERROR_OPTION, '', false );
+			if ( ! empty( $result['deleted'] ) ) {
+				self::log( $job_id, 'finalize', 'info', sprintf( 'Retention: removed %d old backup(s), kept %d.', count( $result['deleted'] ), $result['kept'] ) );
+			}
+		} catch ( \Throwable $e ) {
+			$message = self::logger()->redact( $e->getMessage() );
+			self::log( $job_id, 'finalize', 'warning', 'Retention pruning threw an unexpected error: ' . $message );
+			update_option( self::RETENTION_ERROR_OPTION, $message, false );
+		}
+	}
+
+	/** Phase 5: the tiered-retention counterpart of maybe_prune_old_backups() above -- same never-affects-job-status, fail-closed-logged discipline. */
+	private static function maybe_prune_old_backups_tiered( string $job_id, Nextcloud_Client $client ): void {
+		$tiers = Settings::get_retention_tiers();
+		if ( 0 === $tiers['daily'] && 0 === $tiers['weekly'] && 0 === $tiers['monthly'] ) {
+			return;
+		}
+		try {
+			$parent_rel = $client->relative_path( Settings::get_site_id() . '/backups' );
+			$tiers['timezone'] = wp_timezone();
+			$result = Retention::prune_tiered( $client, $parent_rel, $tiers );
 			if ( is_wp_error( $result ) ) {
 				$message = self::logger()->redact( $result->get_error_message() );
 				self::log( $job_id, 'finalize', 'warning', 'Retention pruning did not fully complete: ' . $message );

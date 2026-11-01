@@ -37,6 +37,8 @@ class Job_Store {
 			error TEXT NULL,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
+			advance_token VARCHAR(64) NULL,
+			advance_chain_count INT NOT NULL DEFAULT 0,
 			PRIMARY KEY  (job_id)
 		) {$charset_collate};";
 		dbDelta( $sql );
@@ -54,22 +56,35 @@ class Job_Store {
 	 * SELECT * caller already in this file, with no merge discipline
 	 * needed anywhere else.
 	 */
+	/**
+	 * Phase 5 (self-chaining job advance): advance_token is a 256-bit
+	 * random secret, generated once here and never derivable from
+	 * job_id (which is itself only 64 random bits and, unlike this
+	 * token, routinely exposed to the logged-in admin's own browser).
+	 * It is the ONLY thing standing between the open, unauthenticated
+	 * wpthistle_backup_self_advance AJAX action and an attacker being
+	 * able to drive an arbitrary job forward -- see cron_advance()/
+	 * self_chain_advance()/ajax_self_advance() in the main plugin file.
+	 * NOT YET SECURITY-AUDITED; flagged there for a Vex pass before this
+	 * is considered production-ready.
+	 */
 	public static function create( string $job_id, string $backup_id, string $destination = 'nextcloud' ): void {
 		global $wpdb;
 		$wpdb->insert(
 			self::table_name(),
 			array(
-				'job_id'      => $job_id,
-				'backup_id'   => $backup_id,
-				'status'      => 'queued',
-				'step'        => 'init',
-				'destination' => $destination,
-				'checkpoint'  => wp_json_encode( array() ),
-				'log'         => wp_json_encode( array() ),
-				'created_at'  => current_time( 'mysql', true ),
-				'updated_at'  => current_time( 'mysql', true ),
+				'job_id'        => $job_id,
+				'backup_id'     => $backup_id,
+				'status'        => 'queued',
+				'step'          => 'init',
+				'destination'   => $destination,
+				'checkpoint'    => wp_json_encode( array() ),
+				'log'           => wp_json_encode( array() ),
+				'created_at'    => current_time( 'mysql', true ),
+				'updated_at'    => current_time( 'mysql', true ),
+				'advance_token' => bin2hex( random_bytes( 32 ) ),
 			),
-			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 	}
 

@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Builds the installable plugin ZIP from plugin/wpguard-nc-backup/ only
-  (no test fixtures, no dev tooling, no .env/.git) into dist/.
+  Builds the installable plugin ZIP from plugin/wpthistle-backup-restore/
+  only (no test fixtures, no dev tooling, no .env/.git) into dist/.
 
   Entries are written manually with forward-slash separators via
   System.IO.Compression directly (not Compress-Archive) -- Compress-Archive
@@ -12,12 +12,12 @@
 #>
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$pluginDir = Join-Path $root "plugin\wpguard-nc-backup"
+$pluginDir = Join-Path $root "plugin\wpthistle-backup-restore"
 $distDir = Join-Path $root "dist"
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
-$version = (Select-String -Path (Join-Path $pluginDir "wpguard-nc-backup.php") -Pattern "Version:\s+([\d.]+)").Matches[0].Groups[1].Value
-$zipPath = Join-Path $distDir "wpguard-nc-backup-$version.zip"
+$version = (Select-String -Path (Join-Path $pluginDir "wpthistle-backup-restore.php") -Pattern "Version:\s+([\d.]+)").Matches[0].Groups[1].Value
+$zipPath = Join-Path $distDir "wpthistle-backup-restore-$version.zip"
 
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
@@ -28,7 +28,7 @@ $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.Zi
 try {
     Get-ChildItem -Path $pluginDir -Recurse -File | ForEach-Object {
         $relative = $_.FullName.Substring($pluginDir.Length + 1) -replace '\\', '/'
-        $entryName = "wpguard-nc-backup/$relative"
+        $entryName = "wpthistle-backup-restore/$relative"
         [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
             $zip, $_.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal
         ) | Out-Null

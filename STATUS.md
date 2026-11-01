@@ -1,5 +1,109 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## 2.2.0 — Phase 6 backup-plan dropdown (Scheduled vs Tiered, monthly cadence), 2026-11-01
+
+the owner noticed a real inconsistency in 2.1.0's UI: the day-of-week picker
+and the tiered-retention checkbox were independent controls that could
+be combined in a way that didn't make sense -- e.g. tiered retention's
+"daily" tier assumes a backup every day, but day-of-week selection could
+restrict backups to 2-3 days a week, silently making "daily" retention
+not daily at all. Replaced both with a single "Backup plan" dropdown:
+
+- **Scheduled** -- an admin-picked cadence (daily day-of-week, unchanged;
+  or new: monthly day-of-month, with a "Last Day of the Month" option so
+  a fixed day like 31 doesn't just silently skip shorter months) plus
+  the simple keep-last-N count.
+- **Tiered** -- backs up every day, no day picker at all, GFS-style
+  daily/weekly/monthly keep-counts (unchanged from 2.1.0's algorithm).
+
+New: `Monthly_Trigger` class (pure day-of-month/"last day" math, same
+testability discipline as `Daily_Trigger`), `claim_month()` (same atomic
+add_option()/conditional-UPDATE pattern as `claim_today()`, keyed by
+"Y-m" instead of "Y-m-d"), `maybe_run_monthly_backup()`/
+`maybe_run_tiered_backup()`/`maybe_run_scheduled_backup()` (the new
+dispatcher boot() and the settings-save handler now call instead of
+`maybe_run_daily_backup()` directly).
+
+`Settings::get_retention_tiered_enabled()` is now derived entirely from
+`schedule_mode` rather than its own independently-submitted checkbox.
+Migration: an install that saved under 2.1.0 (standalone
+`retention_tiered_enabled`, no `schedule_mode` key stored yet) reads its
+last value and lands on the matching mode the first time `get_all()`
+runs post-upgrade -- covered by
+`test_legacy_tiered_enabled_without_schedule_mode_migrates_to_tiered_mode`/
+`test_legacy_tiered_disabled_without_schedule_mode_migrates_to_scheduled_mode`
+in `SettingsValidationTest.php`.
+
+Testing: 188/188 unit tests passed (added `MonthlyTriggerTest.php`, 6
+new cases in `SettingsValidationTest.php`), run directly against a
+disposable `wordpress:cli` container (`docker run --rm -v
+<repo>:/wpguard -w /wpguard wordpress:cli php tests/unit/run-all.php`) --
+noted here as the actual working command for next time, since the bare
+host shell has no `php` on PATH. `run-e2e-scheduling.sh` re-run against
+the live stack unchanged (still passes -- confirms the `claim_today()`/
+`maybe_run_daily_backup()` refactor didn't regress the existing path).
+New `run-e2e-schedule-mode.sh` covers tiered-with-no-days-selected,
+monthly claim/no-claim, and dispatch-through-`maybe_run_scheduled_backup()`
+for all three paths -- first run surfaced a test-script ordering bug (a
+standalone `wp option delete` between cases triggered `boot()` against
+stale settings before the next case's save), not a product bug; fixed by
+folding each case's settings-change-and-trigger into one `wp eval` call,
+same discipline `run-e2e-scheduling.sh` already used.
+
+Security audit (Vex, 2026-11-01), scoped to this release's actual
+changes (schedule_mode/cadence/day_of_month validation, the 'last'/int
+type-juggling, the retention_tiered_enabled->schedule_mode migration,
+claim_month()'s atomicity, and a scope check confirming no reach into
+credentials or the self-advance token path): **CLEAR TO SHIP, zero
+findings.** The self-advance token path itself (2.1.0) is confirmed
+unchanged by grep and was correctly left out of scope.
+
+## 2.1.0 — Phase 5 scheduling/retention overhaul, security audit CLEAR TO SHIP (2 LOW fixed), 2026-11-01
+
+Built in response to a real missed scheduled backup the owner reported (AIO
+Migration succeeded nightly on the same low-traffic site; WPThistle
+didn't). Root cause, confirmed by code inspection rather than the
+ambient-traffic theory first floated: `cron_advance()` needs repeated
+follow-up requests to finish a multi-step job, and a quiet overnight site
+provides none after the first one -- the job starts and stalls. Four
+pieces shipped together:
+
+1. **Self-chaining advance** (the actual fix): a job now fires a
+   non-blocking loopback request at itself after each step
+   (`self_chain_advance()`), same technique WP core's `spawn_cron()` uses.
+   Needed a new unauthenticated `wp_ajax_nopriv_wpthistle_backup_self_advance`
+   handler, gated by a per-job 256-bit `advance_token`.
+2. **Day-based trigger** replacing the old exact-time (HH:MM) single WP-Cron
+   event: the first site visit of a selected day claims that day
+   atomically (`wp_options`) and starts the backup, whichever day it is.
+   `includes/class-scheduler.php` and its exact-time math removed.
+3. **In-admin plain-English job status** (succeeded/running/stalled/failed)
+   on the settings page -- closes a real product gap: there was no way
+   to check backup status without WP-CLI or a raw DB query, and WP-CLI
+   turned out not to be installed in the owner's container.
+4. **Tiered (daily/weekly/monthly) retention**, off by default, using the
+   same bucket-and-keep-most-recent-per-bucket algorithm restic/Borg use
+   (`Retention::prune_tiered()`/`tiered_keep_set()`) rather than a custom
+   anchor-day scheme -- solves both the day-31 and missed-anchor-day
+   problems the owner raised without needing a fixed anchor at all.
+
+Security audit (Vex, 2026-11-01), scoped to the new self-advance endpoint
+since that's the only new unauthenticated surface: **no CRITICAL/HIGH**.
+One MEDIUM (no rate limiting on the unauthenticated endpoint -- accepted,
+server-level fix, not a plugin one) and two LOW (stale `advance_token`
+survived terminal job states; an external caller with a valid token could
+bypass the chain-count cap by hitting the endpoint directly) both fixed
+same-day. Full detail: `docs/threat-model.md` T25.
+
+Version bumped 2.0.0 -> 2.1.0, `readme.txt` changelog updated. Also fixed
+in passing: `docker/scripts/package.ps1` still referenced the pre-rename
+`wpguard-nc-backup` slug/folder name and would not have built a zip at
+all post-rename -- updated to `wpthistle-backup-restore` throughout.
+
+Docs not yet updated for this release: `docs/operations.md` and the rest
+of `docs/threat-model.md` still describe the old exact-time
+`Scheduler::next_run()` model by name in places -- flagged, not yet done.
+
 ## 2.0.0 rename: WPGuard Nextcloud Backup -> WPThistle Backup and Restore, 2026-10-23
 
 With Phase 2 and Phase 3 both complete, the question came up of

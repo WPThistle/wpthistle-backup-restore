@@ -36,6 +36,16 @@ services:
       WORDPRESS_TABLE_PREFIX: ${WP_SOURCE_TABLE_PREFIX}
       WORDPRESS_CONFIG_EXTRA: |
         define('WPTHISTLE_BACKUP_CA_BUNDLE', '/usr/local/share/ca-certificates/wpguard-test-ca.crt');
+        // Phase 5 (self-chaining job advance): siteurl here is the
+        // host-published port (127.0.0.1:8081), not reachable from
+        // inside the docker network at all -- self_chain_advance()'s
+        // loopback needs an address that resolves to wp-source's real
+        // Apache listener regardless of which container the triggering
+        // code actually runs in (wp-source's own Apache process for a
+        // real request, or the wpcli container for anything this test
+        // suite drives via `wp eval`/`wp cron event run`) -- the
+        // service name is valid Docker-internal DNS from both.
+        define('WPTHISTLE_BACKUP_SELF_ADVANCE_URL', 'http://wp-source/wp-admin/admin-ajax.php');
     volumes:
       - wp_source_html:/var/www/html
       - ../plugin/wpthistle-backup-restore:/var/www/html/wp-content/plugins/wpthistle-backup-restore
@@ -291,6 +301,16 @@ services:
       # trust path and the DB_* vars below for the same reason).
       WORDPRESS_CONFIG_EXTRA: |
         define('WPTHISTLE_BACKUP_CA_BUNDLE', '/usr/local/share/ca-certificates/wpguard-test-ca.crt');
+        // Phase 5 (self-chaining job advance): siteurl here is the
+        // host-published port (127.0.0.1:8081), not reachable from
+        // inside the docker network at all -- self_chain_advance()'s
+        // loopback needs an address that resolves to wp-source's real
+        // Apache listener regardless of which container the triggering
+        // code actually runs in (wp-source's own Apache process for a
+        // real request, or the wpcli container for anything this test
+        // suite drives via `wp eval`/`wp cron event run`) -- the
+        // service name is valid Docker-internal DNS from both.
+        define('WPTHISTLE_BACKUP_SELF_ADVANCE_URL', 'http://wp-source/wp-admin/admin-ajax.php');
     volumes:
       - wp_source_html:/var/www/html-source
       - ../plugin/wpthistle-backup-restore:/var/www/html-source/wp-content/plugins/wpthistle-backup-restore
