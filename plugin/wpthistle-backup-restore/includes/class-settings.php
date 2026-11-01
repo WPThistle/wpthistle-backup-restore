@@ -442,6 +442,43 @@ class Settings {
 	}
 
 	/**
+	 * "Forget Connection": clears only the six connection fields (backend,
+	 * URL, username, app password, destination folder, CA bundle path),
+	 * leaving schedule/retention/incremental settings exactly as they
+	 * were. Deliberately NOT routed through save() above -- that method
+	 * requires nextcloud_url/nextcloud_user/remote_folder to be non-empty
+	 * and would reject this outright, and every one of its other fields
+	 * falls back to a hardcoded default (not the current value) when
+	 * absent from its $input, which would silently reset schedule/
+	 * retention/incremental too if this just called save() with those
+	 * fields omitted.
+	 *
+	 * A constant-locked app password isn't actually stored (already
+	 * blanked at save() time, H-02); a constant-locked CA bundle path
+	 * IS still preserved in wp_options by save() (see is_ca_bundle_locked()
+	 * above), so this is the first thing that ever blanks it there.
+	 * Either way the constant itself still wins on every read regardless
+	 * of what's written here (Vex security audit, 2026-11-01, VX-1) --
+	 * this only ever clears what's in wp_options, never the constant.
+	 */
+	public static function forget_connection(): void {
+		$current = self::get_all();
+		$clean   = array_merge(
+			$current,
+			array(
+				'backend'        => 'nextcloud',
+				'nextcloud_url'  => '',
+				'nextcloud_user' => '',
+				'app_password'   => '',
+				'remote_folder'  => '',
+				'ca_bundle_path' => '',
+			)
+		);
+		delete_transient( 'wpthistle_backup_chunk_v2_support_' . md5( $current['nextcloud_url'] ?? '' ) );
+		update_option( self::OPTION_KEY, $clean, false );
+	}
+
+	/**
 	 * Deliberately NOT wp_http_validate_url(): that function's default
 	 * private-IP/hostname blocklist (SSRF hardening meant for fetching
 	 * arbitrary third-party URLs) would reject exactly the self-hosted,

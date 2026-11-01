@@ -65,6 +65,7 @@ class Admin {
 		add_filter( self::STATUS_CARDS_FILTER, array( $this, 'add_own_status_card' ) );
 		add_action( 'wp_ajax_wpthistle_backup_save_settings', array( $this, 'ajax_save_settings' ) );
 		add_action( 'wp_ajax_wpthistle_backup_test_connection', array( $this, 'ajax_test_connection' ) );
+		add_action( 'wp_ajax_wpthistle_backup_forget_connection', array( $this, 'ajax_forget_connection' ) );
 		add_action( 'wp_ajax_wpthistle_backup_start_backup', array( $this, 'ajax_start_backup' ) );
 		add_action( 'wp_ajax_wpthistle_backup_advance_job', array( $this, 'ajax_advance_job' ) );
 		add_action( 'wp_ajax_wpthistle_backup_job_status', array( $this, 'ajax_job_status' ) );
@@ -155,6 +156,9 @@ class Admin {
 								'status_class' => 'neutral',
 								'status_label' => '',
 								'detail'       => '',
+								'version'        => '',
+								'version_ok'     => true,
+								'update_version' => '',
 								'url'          => '',
 							)
 						);
@@ -179,6 +183,12 @@ class Admin {
 							<?php if ( '' !== $card['detail'] ) : ?>
 								<p class="description" style="margin-top:6px;"><?php echo esc_html( $card['detail'] ); ?></p>
 							<?php endif; ?>
+							<?php if ( '' !== $card['version'] ) : ?>
+								<p class="description" style="margin-top:2px;font-size:12px;color:<?php echo $card['version_ok'] ? '#46b450' : '#dc3232'; ?>;"><?php echo esc_html( $card['version'] ); ?></p>
+							<?php endif; ?>
+							<?php if ( '' !== $card['update_version'] ) : ?>
+								<p class="description" style="margin-top:0;font-size:12px;color:#787c82;"><?php echo esc_html( $card['update_version'] ); ?></p>
+							<?php endif; ?>
 						</a>
 					<?php endforeach; ?>
 				</div>
@@ -189,7 +199,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'Built by a human, assembled by AI, running on coffee ☕ -- if WPThistle saved your bacon, the bots would not say no to a refill. %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/itsmnlop" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
 				);
 				?>
 			</p>
@@ -215,6 +225,7 @@ class Admin {
 				'status_class' => 'neutral',
 				'status_label' => __( 'Not configured', 'wpthistle-backup-restore' ),
 				'detail'       => __( 'Connect a Nextcloud, ownCloud, or OpenCloud server to start backing up.', 'wpthistle-backup-restore' ),
+				...$this->version_fields(),
 				'url'          => $url,
 			);
 			return $cards;
@@ -229,6 +240,7 @@ class Admin {
 				'status_class' => 'warn',
 				'status_label' => __( 'No backup yet', 'wpthistle-backup-restore' ),
 				'detail'       => __( 'Configured -- run your first backup.', 'wpthistle-backup-restore' ),
+				...$this->version_fields(),
 				'url'          => $url,
 			);
 			return $cards;
@@ -251,9 +263,32 @@ class Admin {
 			'status_label' => $status_label,
 			/* translators: %s: human-readable time difference, e.g. "2 hours". */
 			'detail'       => sprintf( __( '%s ago', 'wpthistle-backup-restore' ), human_time_diff( strtotime( $latest['updated_at'] . ' UTC' ) ) ),
+			...$this->version_fields(),
 			'url'          => $url,
 		);
 		return $cards;
+	}
+
+	/**
+	 * This plugin's own "Installed: vX.Y.Z" / "Latest: vX.Y.Z" pair for the
+	 * family hub card. Reads WP core's own update_plugins transient (already
+	 * populated by Update_Checker::check_for_update(), which already does
+	 * the GitHub call + trusted-URL check) instead of making a second
+	 * network request here just to show a version string.
+	 */
+	private function version_fields(): array {
+		$basename    = plugin_basename( WPTHISTLE_BACKUP_DIR . 'wpthistle-backup-restore.php' );
+		$updates     = get_site_transient( 'update_plugins' );
+		$item        = is_object( $updates ) && isset( $updates->response[ $basename ] ) ? $updates->response[ $basename ] : null;
+		$new_version = is_string( $item->new_version ?? null ) ? $item->new_version : '';
+
+		return array(
+			/* translators: %s: currently installed plugin version number. */
+			'version'        => sprintf( __( 'Installed: v%s', 'wpthistle-backup-restore' ), WPTHISTLE_BACKUP_VERSION ),
+			'version_ok'     => '' === $new_version,
+			/* translators: %s: newer plugin version number available to update to. */
+			'update_version' => '' !== $new_version ? sprintf( __( 'Latest: v%s', 'wpthistle-backup-restore' ), $new_version ) : '',
+		);
 	}
 
 	private function require_capability_and_nonce(): bool {
@@ -324,6 +359,14 @@ class Admin {
 		} else {
 			wp_send_json_error( array( 'message' => $result['message'], 'reason' => $result['reason'] ) );
 		}
+	}
+
+	public function ajax_forget_connection(): void {
+		if ( ! $this->require_capability_and_nonce() ) {
+			return;
+		}
+		Settings::forget_connection();
+		wp_send_json_success( array( 'message' => __( 'Connection forgotten. Scheduled and Tiered backups will fail until reconnected.', 'wpthistle-backup-restore' ) ) );
 	}
 
 	public function ajax_start_backup(): void {
@@ -725,6 +768,60 @@ class Admin {
 				<p><em><?php esc_html_e( 'No verified backup yet.', 'wpthistle-backup-restore' ); ?></em></p>
 			<?php endif; ?>
 
+			<h2 class="nav-tab-wrapper" id="wpthistle_backup_tabs">
+				<a href="#" class="nav-tab nav-tab-active" data-tab="home"><?php esc_html_e( 'Home', 'wpthistle-backup-restore' ); ?></a>
+				<a href="#" class="nav-tab" data-tab="connection"><?php esc_html_e( 'Connection', 'wpthistle-backup-restore' ); ?></a>
+				<a href="#" class="nav-tab" data-tab="schedule"><?php esc_html_e( 'Backup Schedule', 'wpthistle-backup-restore' ); ?></a>
+				<a href="#" class="nav-tab" data-tab="advanced"><?php esc_html_e( 'Advanced', 'wpthistle-backup-restore' ); ?></a>
+			</h2>
+
+			<div id="wpthistle_backup_tab_home" class="wpthistle-backup-tab-panel">
+			<h2><?php esc_html_e( 'Manual backup', 'wpthistle-backup-restore' ); ?></h2>
+			<p>
+				<button type="button" class="button button-primary" id="wpthistle_backup_backup_now"><?php esc_html_e( 'Back Up Now', 'wpthistle-backup-restore' ); ?></button>
+				<button type="button" class="button" id="wpthistle_backup_download_now"><?php esc_html_e( 'Download Now', 'wpthistle-backup-restore' ); ?></button>
+				<button type="button" class="button" id="wpthistle_backup_cancel_job"><?php esc_html_e( 'Cancel / Reset Stuck Job', 'wpthistle-backup-restore' ); ?></button>
+			</p>
+			<p class="description"><?php esc_html_e( 'Back Up Now sends this backup to your configured cloud storage destination. Download Now instead packages the same backup into one .zip and lets you save it straight to your own computer -- no cloud storage configuration required. A pending download is NOT deleted automatically just because you clicked Download (the server cannot confirm your browser received every byte) -- it stays on this server, guarded against direct web access, until you click "Delete local copy" below, start another Download Now backup (which replaces it), or 24 hours pass, whichever comes first.', 'wpthistle-backup-restore' ); ?></p>
+			<p class="description"><?php esc_html_e( 'If a backup never completes (e.g. the site had no other traffic to trigger the WP-Cron fallback), use Cancel to mark it failed so a new backup can start. Already-uploaded parts of a cancelled job are left on Nextcloud untouched.', 'wpthistle-backup-restore' ); ?></p>
+			<div id="wpthistle_backup_job_status" role="status"></div>
+			<p id="wpthistle_backup_job_download_row" style="display:none;"><a class="button button-primary" id="wpthistle_backup_job_download_link" href="#"><?php esc_html_e( 'Download backup (.zip)', 'wpthistle-backup-restore' ); ?></a> <button type="button" class="button" id="wpthistle_backup_job_download_delete"><?php esc_html_e( 'Delete local copy', 'wpthistle-backup-restore' ); ?></button></p>
+			<pre id="wpthistle_backup_job_log" style="max-height:300px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;"></pre>
+
+			<h2><?php esc_html_e( 'Restore', 'wpthistle-backup-restore' ); ?></h2>
+			<p class="description"><strong><?php esc_html_e( 'This overwrites this site\'s current content and database with a chosen backup, in place.', 'wpthistle-backup-restore' ); ?></strong>
+			<?php esc_html_e( 'Nothing is ever permanently deleted by it — anything it replaces is renamed aside (database tables under a "wpgbak…" prefix, files into a timestamped rollback folder) for manual recovery, never dropped outright. Still: back up anything you cannot afford to lose before using this on a site that matters.', 'wpthistle-backup-restore' ); ?></p>
+			<table class="form-table" role="presentation">
+				<tr>
+					<th><?php esc_html_e( 'Source', 'wpthistle-backup-restore' ); ?></th>
+					<td>
+						<label><input type="radio" name="wpthistle_backup_restore_source" value="nextcloud" checked> <?php esc_html_e( 'Choose from configured cloud storage', 'wpthistle-backup-restore' ); ?></label>
+						<select id="wpthistle_backup_restore_backup_list" style="margin-left:8px;"><option value=""><?php esc_html_e( '— loading —', 'wpthistle-backup-restore' ); ?></option></select>
+						<br><br>
+						<label><input type="radio" name="wpthistle_backup_restore_source" value="upload"> <?php esc_html_e( 'Upload a backup bundle', 'wpthistle-backup-restore' ); ?></label>
+						<input type="file" id="wpthistle_backup_restore_upload_file" accept=".zip" style="margin-left:8px;">
+						<button type="button" class="button" id="wpthistle_backup_restore_upload_btn"><?php esc_html_e( 'Upload', 'wpthistle-backup-restore' ); ?></button>
+						<span id="wpthistle_backup_restore_upload_result"></span>
+						<p class="description"><?php esc_html_e( 'A single .zip containing manifest.json, COMPLETE.json, database.sql.gz, and files.part-*.zip at its root. Only supports a self-contained (full) backup — an incremental backup\'s ancestor parts can only be reached via the Nextcloud source.', 'wpthistle-backup-restore' ); ?></p>
+					</td>
+				</tr>
+				<tr>
+					<th><label for="wpthistle_backup_restore_confirm_text"><?php esc_html_e( 'Confirm', 'wpthistle-backup-restore' ); ?></label></th>
+					<td>
+						<input type="text" id="wpthistle_backup_restore_confirm_text" class="regular-text" placeholder="RESTORE">
+						<p class="description"><?php esc_html_e( 'Type RESTORE to enable the button below.', 'wpthistle-backup-restore' ); ?></p>
+						<label><input type="checkbox" id="wpthistle_backup_restore_confirm_url"> <?php esc_html_e( 'Migrate this backup to this site: this backup is from a different site, and I want every URL in it rewritten to this site\'s own address', 'wpthistle-backup-restore' ); ?></label>
+						<p class="description"><?php esc_html_e( 'Checking this does not just skip the mismatch warning -- it rewrites every occurrence of the backup\'s own domain (in post content, widget settings, and everywhere else WordPress stores a URL) to this site\'s domain, before anything is restored live. Leave unchecked to restore this backup onto the exact site it came from.', 'wpthistle-backup-restore' ); ?></p>
+					</td>
+				</tr>
+			</table>
+			<p>
+				<button type="button" class="button button-primary" id="wpthistle_backup_restore_start" disabled><?php esc_html_e( 'Restore Now', 'wpthistle-backup-restore' ); ?></button>
+			</p>
+			<div id="wpthistle_backup_restore_status" role="status"></div>
+			<pre id="wpthistle_backup_restore_log" style="max-height:300px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;"></pre>
+			</div>
+			<div id="wpthistle_backup_tab_connection" class="wpthistle-backup-tab-panel" style="display:none;">
 			<h2><?php esc_html_e( 'Connection', 'wpthistle-backup-restore' ); ?></h2>
 			<table class="form-table" role="presentation">
 				<tr>
@@ -764,6 +861,26 @@ class Admin {
 						<p class="description"><?php esc_html_e( 'Only for a private CA you operate (e.g. self-hosted Nextcloud). Leave blank for a normal publicly trusted certificate — this never weakens TLS verification, it only adds a trusted root.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
+			</table>
+			<p>
+				<button type="button" class="button button-primary" id="wpthistle_backup_save_connection"><?php esc_html_e( 'Save Settings', 'wpthistle-backup-restore' ); ?></button>
+				<button type="button" class="button" id="wpthistle_backup_test"><?php esc_html_e( 'Test Connection', 'wpthistle-backup-restore' ); ?></button>
+			</p>
+			<div id="wpthistle_backup_connection_result" role="status"></div>
+
+			<h2><?php esc_html_e( 'Forget Connection', 'wpthistle-backup-restore' ); ?></h2>
+			<p class="description"><?php esc_html_e( 'Clears the server URL, username, app password / app token, destination folder, and CA bundle path stored on this site. Nothing on your Nextcloud, ownCloud, or OpenCloud server is touched or deleted; this only clears what this site remembers about how to reach it. Scheduled and Tiered backups will fail until you reconnect. A credential set via a wp-config.php constant cannot be cleared from here. It keeps working regardless of what this clears, so remove or blank the constant itself instead.', 'wpthistle-backup-restore' ); ?></p>
+			<p>
+				<input type="text" id="wpthistle_backup_forget_confirm_text" class="regular-text" placeholder="FORGET">
+				<button type="button" class="button" id="wpthistle_backup_forget_btn" disabled><?php esc_html_e( 'Forget Connection', 'wpthistle-backup-restore' ); ?></button>
+			</p>
+			<p class="description"><?php esc_html_e( 'Type FORGET to enable the button above.', 'wpthistle-backup-restore' ); ?></p>
+			<div id="wpthistle_backup_forget_result" role="status"></div>
+
+			</div>
+			<div id="wpthistle_backup_tab_schedule" class="wpthistle-backup-tab-panel" style="display:none;">
+			<h2><?php esc_html_e( 'Backup Schedule', 'wpthistle-backup-restore' ); ?></h2>
+			<table class="form-table" role="presentation">
 				<tr>
 					<th><label for="wpthistle_backup_schedule_mode"><?php esc_html_e( 'Backup plan', 'wpthistle-backup-restore' ); ?></label></th>
 					<td>
@@ -843,10 +960,11 @@ class Admin {
 			</table>
 			<p>
 				<button type="button" class="button button-primary" id="wpthistle_backup_save"><?php esc_html_e( 'Save Settings', 'wpthistle-backup-restore' ); ?></button>
-				<button type="button" class="button" id="wpthistle_backup_test"><?php esc_html_e( 'Test Connection', 'wpthistle-backup-restore' ); ?></button>
 			</p>
 			<div id="wpthistle_backup_settings_result" role="status"></div>
 
+			</div>
+			<div id="wpthistle_backup_tab_advanced" class="wpthistle-backup-tab-panel" style="display:none;">
 			<h2><?php esc_html_e( 'Guaranteed scheduling (optional, advanced)', 'wpthistle-backup-restore' ); ?></h2>
 			<p class="description">
 				<?php esc_html_e( 'The schedule above runs on whichever request reaches this site first on a selected day, and now also self-advances once started (no longer needing further site traffic to finish) -- in practice this covers almost every site. The one remaining edge case: a site with truly zero requests of any kind for an entire selected day. For that, an outside scheduler can visit this URL periodically instead:', 'wpthistle-backup-restore' ); ?>
@@ -862,50 +980,7 @@ class Admin {
 				?>
 			</p>
 
-			<h2><?php esc_html_e( 'Manual backup', 'wpthistle-backup-restore' ); ?></h2>
-			<p>
-				<button type="button" class="button button-primary" id="wpthistle_backup_backup_now"><?php esc_html_e( 'Back Up Now', 'wpthistle-backup-restore' ); ?></button>
-				<button type="button" class="button" id="wpthistle_backup_download_now"><?php esc_html_e( 'Download Now', 'wpthistle-backup-restore' ); ?></button>
-				<button type="button" class="button" id="wpthistle_backup_cancel_job"><?php esc_html_e( 'Cancel / Reset Stuck Job', 'wpthistle-backup-restore' ); ?></button>
-			</p>
-			<p class="description"><?php esc_html_e( 'Back Up Now sends this backup to your configured cloud storage destination. Download Now instead packages the same backup into one .zip and lets you save it straight to your own computer -- no cloud storage configuration required. A pending download is NOT deleted automatically just because you clicked Download (the server cannot confirm your browser received every byte) -- it stays on this server, guarded against direct web access, until you click "Delete local copy" below, start another Download Now backup (which replaces it), or 24 hours pass, whichever comes first.', 'wpthistle-backup-restore' ); ?></p>
-			<p class="description"><?php esc_html_e( 'If a backup never completes (e.g. the site had no other traffic to trigger the WP-Cron fallback), use Cancel to mark it failed so a new backup can start. Already-uploaded parts of a cancelled job are left on Nextcloud untouched.', 'wpthistle-backup-restore' ); ?></p>
-			<div id="wpthistle_backup_job_status" role="status"></div>
-			<p id="wpthistle_backup_job_download_row" style="display:none;"><a class="button button-primary" id="wpthistle_backup_job_download_link" href="#"><?php esc_html_e( 'Download backup (.zip)', 'wpthistle-backup-restore' ); ?></a> <button type="button" class="button" id="wpthistle_backup_job_download_delete"><?php esc_html_e( 'Delete local copy', 'wpthistle-backup-restore' ); ?></button></p>
-			<pre id="wpthistle_backup_job_log" style="max-height:300px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;"></pre>
-
-			<h2><?php esc_html_e( 'Restore', 'wpthistle-backup-restore' ); ?></h2>
-			<p class="description"><strong><?php esc_html_e( 'This overwrites this site\'s current content and database with a chosen backup, in place.', 'wpthistle-backup-restore' ); ?></strong>
-			<?php esc_html_e( 'Nothing is ever permanently deleted by it — anything it replaces is renamed aside (database tables under a "wpgbak…" prefix, files into a timestamped rollback folder) for manual recovery, never dropped outright. Still: back up anything you cannot afford to lose before using this on a site that matters.', 'wpthistle-backup-restore' ); ?></p>
-			<table class="form-table" role="presentation">
-				<tr>
-					<th><?php esc_html_e( 'Source', 'wpthistle-backup-restore' ); ?></th>
-					<td>
-						<label><input type="radio" name="wpthistle_backup_restore_source" value="nextcloud" checked> <?php esc_html_e( 'Choose from configured cloud storage', 'wpthistle-backup-restore' ); ?></label>
-						<select id="wpthistle_backup_restore_backup_list" style="margin-left:8px;"><option value=""><?php esc_html_e( '— loading —', 'wpthistle-backup-restore' ); ?></option></select>
-						<br><br>
-						<label><input type="radio" name="wpthistle_backup_restore_source" value="upload"> <?php esc_html_e( 'Upload a backup bundle', 'wpthistle-backup-restore' ); ?></label>
-						<input type="file" id="wpthistle_backup_restore_upload_file" accept=".zip" style="margin-left:8px;">
-						<button type="button" class="button" id="wpthistle_backup_restore_upload_btn"><?php esc_html_e( 'Upload', 'wpthistle-backup-restore' ); ?></button>
-						<span id="wpthistle_backup_restore_upload_result"></span>
-						<p class="description"><?php esc_html_e( 'A single .zip containing manifest.json, COMPLETE.json, database.sql.gz, and files.part-*.zip at its root. Only supports a self-contained (full) backup — an incremental backup\'s ancestor parts can only be reached via the Nextcloud source.', 'wpthistle-backup-restore' ); ?></p>
-					</td>
-				</tr>
-				<tr>
-					<th><label for="wpthistle_backup_restore_confirm_text"><?php esc_html_e( 'Confirm', 'wpthistle-backup-restore' ); ?></label></th>
-					<td>
-						<input type="text" id="wpthistle_backup_restore_confirm_text" class="regular-text" placeholder="RESTORE">
-						<p class="description"><?php esc_html_e( 'Type RESTORE to enable the button below.', 'wpthistle-backup-restore' ); ?></p>
-						<label><input type="checkbox" id="wpthistle_backup_restore_confirm_url"> <?php esc_html_e( 'Migrate this backup to this site: this backup is from a different site, and I want every URL in it rewritten to this site\'s own address', 'wpthistle-backup-restore' ); ?></label>
-						<p class="description"><?php esc_html_e( 'Checking this does not just skip the mismatch warning -- it rewrites every occurrence of the backup\'s own domain (in post content, widget settings, and everywhere else WordPress stores a URL) to this site\'s domain, before anything is restored live. Leave unchecked to restore this backup onto the exact site it came from.', 'wpthistle-backup-restore' ); ?></p>
-					</td>
-				</tr>
-			</table>
-			<p>
-				<button type="button" class="button button-primary" id="wpthistle_backup_restore_start" disabled><?php esc_html_e( 'Restore Now', 'wpthistle-backup-restore' ); ?></button>
-			</p>
-			<div id="wpthistle_backup_restore_status" role="status"></div>
-			<pre id="wpthistle_backup_restore_log" style="max-height:300px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;"></pre>
+			</div>
 		</div>
 		<script>
 		(function(){
@@ -921,6 +996,88 @@ class Admin {
 				return fetch(ajaxUrl, { method: 'POST', credentials: 'same-origin', body: body })
 					.then(function(r){ return r.json(); });
 			}
+
+			var settingsDirty = false;
+			var settingsFieldIds = [
+				'wpthistle_backup_backend', 'wpthistle_backup_url', 'wpthistle_backup_user', 'wpthistle_backup_pw',
+				'wpthistle_backup_folder', 'wpthistle_backup_ca',
+				'wpthistle_backup_schedule_mode', 'wpthistle_backup_schedule_cadence', 'wpthistle_backup_schedule_day_of_month',
+				'wpthistle_backup_retention', 'wpthistle_backup_retention_daily', 'wpthistle_backup_retention_weekly',
+				'wpthistle_backup_retention_monthly', 'wpthistle_backup_incremental'
+			];
+			settingsFieldIds.forEach(function(id){
+				var el = document.getElementById(id);
+				el.addEventListener('input', function(){ settingsDirty = true; });
+				el.addEventListener('change', function(){ settingsDirty = true; });
+			});
+			Array.prototype.forEach.call(document.querySelectorAll('.wpthistle_backup_schedule_day'), function(el){
+				el.addEventListener('change', function(){ settingsDirty = true; });
+			});
+
+			// Vex security audit (2026-11-01, VX-4): snapshotted so "leave
+			// without saving" can actually revert the fields, not just
+			// silently clear the dirty flag while leaving the abandoned
+			// edits sitting in the DOM for the next Save click to commit
+			// by accident. Re-captured after every successful save, so a
+			// later revert always goes back to what's really stored, not
+			// just what was on the page at initial load.
+			var lastSavedValues = {};
+			function captureSavedValues() {
+				settingsFieldIds.forEach(function(id){
+					var el = document.getElementById(id);
+					lastSavedValues[id] = (el.type === 'checkbox') ? el.checked : el.value;
+				});
+				Array.prototype.forEach.call(document.querySelectorAll('.wpthistle_backup_schedule_day'), function(el){
+					lastSavedValues['day_' + el.value] = el.checked;
+				});
+			}
+			function revertToLastSaved() {
+				settingsFieldIds.forEach(function(id){
+					var el = document.getElementById(id);
+					if (el.type === 'checkbox') {
+						el.checked = lastSavedValues[id];
+					} else {
+						el.value = lastSavedValues[id];
+					}
+				});
+				Array.prototype.forEach.call(document.querySelectorAll('.wpthistle_backup_schedule_day'), function(el){
+					el.checked = lastSavedValues['day_' + el.value];
+				});
+				updateScheduleVisibility();
+			}
+			captureSavedValues();
+
+			window.addEventListener('beforeunload', function(e){
+				if (!settingsDirty) {
+					return;
+				}
+				e.preventDefault();
+				e.returnValue = '';
+			});
+
+			var tabLinks = document.querySelectorAll('#wpthistle_backup_tabs .nav-tab');
+			var tabPanels = {
+				home: document.getElementById('wpthistle_backup_tab_home'),
+				connection: document.getElementById('wpthistle_backup_tab_connection'),
+				schedule: document.getElementById('wpthistle_backup_tab_schedule'),
+				advanced: document.getElementById('wpthistle_backup_tab_advanced')
+			};
+			Array.prototype.forEach.call(tabLinks, function(link){
+				link.addEventListener('click', function(e){
+					e.preventDefault();
+					if (settingsDirty) {
+						if (!window.confirm(<?php echo wp_json_encode( __( 'You have unsaved changes on this tab. Leave without saving?', 'wpthistle-backup-restore' ) ); ?>)) {
+							return;
+						}
+						revertToLastSaved();
+					}
+					settingsDirty = false;
+					Array.prototype.forEach.call(tabLinks, function(l){ l.classList.remove('nav-tab-active'); });
+					link.classList.add('nav-tab-active');
+					Object.keys(tabPanels).forEach(function(key){ tabPanels[key].style.display = 'none'; });
+					tabPanels[link.dataset.tab].style.display = '';
+				});
+			});
 
 			function updateScheduleVisibility() {
 				var mode = document.getElementById('wpthistle_backup_schedule_mode').value;
@@ -940,7 +1097,7 @@ class Admin {
 			document.getElementById('wpthistle_backup_schedule_cadence').addEventListener('change', updateScheduleVisibility);
 			updateScheduleVisibility();
 
-			document.getElementById('wpthistle_backup_save').addEventListener('click', function(){
+			function saveSettings(resultElId) {
 				post('wpthistle_backup_save_settings', {
 					backend: document.getElementById('wpthistle_backup_backend').value,
 					nextcloud_url: document.getElementById('wpthistle_backup_url').value,
@@ -958,14 +1115,48 @@ class Admin {
 					retention_monthly: document.getElementById('wpthistle_backup_retention_monthly').value,
 					incremental_enabled: document.getElementById('wpthistle_backup_incremental').checked ? '1' : ''
 				}).then(function(res){
-					document.getElementById('wpthistle_backup_settings_result').textContent = res.data.message;
+					document.getElementById(resultElId).textContent = res.data.message;
+					if (res.success) {
+						settingsDirty = false;
+						captureSavedValues();
+					}
 				});
+			}
+			document.getElementById('wpthistle_backup_save').addEventListener('click', function(){
+				saveSettings('wpthistle_backup_settings_result');
+			});
+			document.getElementById('wpthistle_backup_save_connection').addEventListener('click', function(){
+				saveSettings('wpthistle_backup_connection_result');
 			});
 
 			document.getElementById('wpthistle_backup_test').addEventListener('click', function(){
-				document.getElementById('wpthistle_backup_settings_result').textContent = 'Testing...';
+				document.getElementById('wpthistle_backup_connection_result').textContent = 'Testing...';
 				post('wpthistle_backup_test_connection', {}).then(function(res){
-					document.getElementById('wpthistle_backup_settings_result').textContent = res.data.message;
+					document.getElementById('wpthistle_backup_connection_result').textContent = res.data.message;
+				});
+			});
+
+			function updateForgetButtonState() {
+				document.getElementById('wpthistle_backup_forget_btn').disabled =
+					document.getElementById('wpthistle_backup_forget_confirm_text').value.trim() !== 'FORGET';
+			}
+			document.getElementById('wpthistle_backup_forget_confirm_text').addEventListener('input', updateForgetButtonState);
+
+			document.getElementById('wpthistle_backup_forget_btn').addEventListener('click', function(){
+				post('wpthistle_backup_forget_connection', {}).then(function(res){
+					document.getElementById('wpthistle_backup_forget_result').textContent = res.data.message;
+					if (res.success) {
+						document.getElementById('wpthistle_backup_backend').value = 'nextcloud';
+						document.getElementById('wpthistle_backup_url').value = '';
+						document.getElementById('wpthistle_backup_user').value = '';
+						document.getElementById('wpthistle_backup_pw').value = '';
+						document.getElementById('wpthistle_backup_folder').value = '';
+						document.getElementById('wpthistle_backup_ca').value = '';
+						document.getElementById('wpthistle_backup_forget_confirm_text').value = '';
+						updateForgetButtonState();
+						settingsDirty = false;
+						captureSavedValues();
+					}
 				});
 			});
 

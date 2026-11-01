@@ -391,6 +391,59 @@ function test_locked_app_password_purges_stored_wp_options_value() {
 	wpguard_assert_equals( '', $stored['app_password'], 'the stale wp_options value must be purged once the constant takes over (H-02)' );
 }
 
+// "Forget Connection" admin action: must clear only the six connection
+// fields, leaving schedule/retention/incremental exactly as they were.
+// Deliberately NOT routed through save() (see forget_connection()'s own
+// docblock) -- this is the regression test for that distinction.
+function test_forget_connection_clears_connection_fields_only() {
+	$GLOBALS['__wpguard_test_options'] = array(
+		Settings::OPTION_KEY => array(
+			'backend'              => 'owncloud',
+			'nextcloud_url'        => 'https://nc.example.com',
+			'nextcloud_user'       => 'u',
+			'app_password'         => 'secret',
+			'remote_folder'        => 'backups',
+			'ca_bundle_path'       => '/etc/ssl/private-ca.pem',
+			'schedule_mode'        => 'tiered',
+			'schedule_cadence'     => 'monthly',
+			'schedule_day_of_month' => 15,
+			'schedule_days'        => array( 1, 3, 5 ),
+			'retention_count'      => 9,
+			'retention_daily'      => 3,
+			'retention_weekly'     => 2,
+			'retention_monthly'    => 6,
+			'incremental_enabled'  => true,
+		),
+	);
+	Settings::forget_connection();
+	$after = Settings::get_all();
+
+	wpguard_assert_equals( 'nextcloud', $after['backend'], 'backend must reset to the default' );
+	wpguard_assert_equals( '', $after['nextcloud_url'], 'nextcloud_url must be cleared' );
+	wpguard_assert_equals( '', $after['nextcloud_user'], 'nextcloud_user must be cleared' );
+	wpguard_assert_equals( '', $after['app_password'], 'app_password must be cleared' );
+	wpguard_assert_equals( '', $after['remote_folder'], 'remote_folder must be cleared' );
+	wpguard_assert_equals( '', $after['ca_bundle_path'], 'ca_bundle_path must be cleared' );
+
+	wpguard_assert_equals( 'tiered', $after['schedule_mode'], 'schedule_mode must NOT be touched by forgetting the connection' );
+	wpguard_assert_equals( 'monthly', $after['schedule_cadence'], 'schedule_cadence must NOT be touched' );
+	wpguard_assert_equals( 15, $after['schedule_day_of_month'], 'schedule_day_of_month must NOT be touched' );
+	wpguard_assert_equals( array( 1, 3, 5 ), $after['schedule_days'], 'schedule_days must NOT be touched' );
+	wpguard_assert_equals( 9, $after['retention_count'], 'retention_count must NOT be touched' );
+	wpguard_assert_equals( 3, $after['retention_daily'], 'retention_daily must NOT be touched' );
+	wpguard_assert_equals( 2, $after['retention_weekly'], 'retention_weekly must NOT be touched' );
+	wpguard_assert_equals( 6, $after['retention_monthly'], 'retention_monthly must NOT be touched' );
+	wpguard_assert( true === $after['incremental_enabled'], 'incremental_enabled must NOT be touched' );
+}
+
+// Calling it with nothing configured yet must be a safe no-op, not a
+// notice/warning from touching keys that were never set.
+function test_forget_connection_is_safe_when_nothing_is_configured() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	Settings::forget_connection();
+	wpguard_assert( ! Settings::has_credentials(), 'forgetting an already-blank connection must not error, and credentials must still read as absent' );
+}
+
 // 2.0.0 rename: a site whose wp-config.php still defines the LEGACY
 // constant name (not yet updated to WPTHISTLE_BACKUP_APP_PASSWORD)
 // must still lock correctly through the fallback.
@@ -439,6 +492,8 @@ return array(
 	'test_redact_wp_config_survives_double_quoted_value_containing_close_paren_semicolon',
 	'test_redact_wp_config_db_credentials_strips_db_constants',
 	'test_redact_wp_config_db_credentials_survives_password_containing_close_paren_semicolon',
+	'test_forget_connection_clears_connection_fields_only',
+	'test_forget_connection_is_safe_when_nothing_is_configured',
 	'test_legacy_app_password_constant_still_locks',
 	'test_locked_app_password_purges_stored_wp_options_value',
 );

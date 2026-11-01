@@ -1,5 +1,65 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## 2.3.0 — settings-page tabs, Forget Connection, family-hub version display, 2026-11-01
+
+Version bumped and tagged once the work was actually ready to ship, per
+the revised in-session convention (a bump happens once, not per edit
+while something is still being iterated on).
+
+- **Settings page split into four tabs** (Home, Connection, Backup
+  Schedule, Advanced). The single long settings page was running
+  Connection and Scheduling fields together with no visual separation,
+  and "Test Connection" was buried below the Scheduling fields even
+  though it only ever touches the Connection fields. Pure JS show/hide
+  (WP core's own `nav-tab-wrapper` markup), no new page loads, no new
+  AJAX endpoints. Save Settings now has a button on both the Connection
+  and Backup Schedule tabs; both still submit the complete form either
+  way. Added a client-side unsaved-changes guard (confirm on tab switch,
+  native `beforeunload` on page leave/reload).
+- **New "Forget Connection" admin action** (Connection tab): typed-FORGET
+  confirm gate (same pattern as Restore's typed-RESTORE gate) wired to a
+  new `Settings::forget_connection()` that clears only the six connection
+  fields (backend/URL/username/app password/folder/CA bundle path),
+  leaving schedule/retention/incremental settings untouched. Deliberately
+  not routed through the normal `save()` validation path; see that
+  method's own docblock for why `save()` would have either rejected the
+  request outright or silently reset unrelated settings to hardcoded
+  defaults.
+- **Family hub status card now shows "Installed: vX.Y.Z" / "Latest:
+  vX.Y.Z"** (colored red/green), reading WP core's own already-populated
+  `update_plugins` transient rather than making a new network call.
+- **Vex security audit (T26 in docs/threat-model.md): CLEAR TO SHIP, four
+  LOW findings, three fixed same-day** (a docblock inaccuracy about
+  constant-locked CA bundle storage; the scheduling trigger functions
+  claiming today's/this month's slot before checking
+  `has_credentials()`, which could burn a slot with no backup made and
+  no retry until the next period; the tab-switch "leave without saving"
+  guard not actually reverting abandoned field edits). One LOW accepted
+  as documented behavior (credentials cleared mid-upload already fails a
+  job cleanly, just with a less-informative raw error message; see
+  T26).
+- Test coverage: 2 new unit tests for `forget_connection()`
+  (`tests/unit/SettingsValidationTest.php`), new
+  `tests/e2e/run-e2e-forget-connection.sh` (real authenticated HTTP
+  against the live stack: unauthenticated refused, wrong-nonce refused,
+  real request clears only connection fields). 190/190 unit tests passing.
+- Full E2E battery re-run (all 17 non-multi-backend suites, not just the
+  ones this diff touched), since the tab restructure moved markup other
+  suites scrape (e.g. `run-e2e-download-backup.sh`'s nonce regex). 15
+  pass clean. `run-e2e-chunked-upload.sh` fails for an unrelated,
+  pre-existing reason: the OpenCloud test container has been stopped for
+  9 days, nothing to do with this diff. `run-e2e-download-backup.sh`
+  failed only when run immediately after that chunked-upload failure in
+  the same batch; re-run standalone it passes clean, so this was a
+  sequencing artifact, not a regression.
+- A headless-browser smoke pass (Playwright, against wp-restore:8082) ran
+  the new tab JS for real for the first time: tab switching, zero
+  console/page errors, the typed-FORGET gate, and the VX-4 revert-on-
+  discard fix all verified working. Still not done: the owner's own
+  hands-on click-through is the only check of visual polish/feel: the
+  automated pass only proves the JS runs correctly, not that it looks
+  right.
+
 ## 2.2.0 — Phase 6 backup-plan dropdown (Scheduled vs Tiered, monthly cadence), 2026-11-01
 
 the owner noticed a real inconsistency in 2.1.0's UI: the day-of-week picker

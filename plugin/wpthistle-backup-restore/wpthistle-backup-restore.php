@@ -4,7 +4,7 @@
  * Plugin URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Update URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Description:       Creates recoverable backups of this WordPress site (files + database) and transfers them to a user-controlled Nextcloud, ownCloud, or OpenCloud server over authenticated HTTPS WebDAV -- or packages them straight to your browser with zero cloud dependency. Manual or scheduled backups, retention pruning, and one-click in-place restore from either a configured server destination or an uploaded backup bundle.
- * Version:           2.2.2
+ * Version:           2.3.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            WPThistle project
@@ -57,7 +57,7 @@ define( 'WPTHISTLE_BACKUP_RESTORE_BOOTSTRAPPED', __FILE__ );
 // still fatals with "Cannot redeclare function ...".
 if ( true ) {
 
-define( 'WPTHISTLE_BACKUP_VERSION', '2.2.2' );
+define( 'WPTHISTLE_BACKUP_VERSION', '2.3.0' );
 // Phase 2 (incremental backups): bumped 1 -> 2. Every manifest this
 // plugin writes from here on -- full or incremental alike -- carries
 // new backup_mode/base_backup_id/parent_backup_id/files fields.
@@ -322,6 +322,17 @@ function maybe_run_daily_backup(): void {
 	if ( empty( $days ) ) {
 		return;
 	}
+	// Vex security audit (2026-11-01, VX-2): checked BEFORE claim_today(), not
+	// after. Claiming first and checking credentials only inside
+	// start_claimed_backup() meant a site with no (or just-forgotten)
+	// credentials would burn today's slot on the very first request
+	// and never get a real retry today even if reconnected minutes
+	// later. Still re-checked inside start_claimed_backup() too (cheap,
+	// harmless) as defense against the narrow window where credentials
+	// are forgotten between this check and the claim succeeding.
+	if ( ! Settings::has_credentials() ) {
+		return;
+	}
 	$tz = wp_timezone();
 	$now = time();
 	if ( ! Daily_Trigger::is_due_today( $days, $now, $tz ) ) {
@@ -340,6 +351,11 @@ function maybe_run_daily_backup(): void {
  * day-of-week -- see Monthly_Trigger and Settings::get_schedule_day_of_month().
  */
 function maybe_run_monthly_backup(): void {
+	// Vex security audit (2026-11-01, VX-2): see maybe_run_daily_backup()'s
+	// matching comment; checked before claim_month() for the same reason.
+	if ( ! Settings::has_credentials() ) {
+		return;
+	}
 	$day = Settings::get_schedule_day_of_month();
 	$tz = wp_timezone();
 	$now = time();
@@ -364,6 +380,11 @@ function maybe_run_monthly_backup(): void {
  * is ever reachable for a given site's current settings).
  */
 function maybe_run_tiered_backup(): void {
+	// Vex security audit (2026-11-01, VX-2): see maybe_run_daily_backup()'s
+	// matching comment; checked before claim_today() for the same reason.
+	if ( ! Settings::has_credentials() ) {
+		return;
+	}
 	$tz = wp_timezone();
 	$today = Daily_Trigger::today( time(), $tz );
 	if ( ! claim_today( $today['date'] ) ) {
@@ -466,7 +487,7 @@ function claim_period( string $option_name, string $key ): bool {
 add_filter( 'plugin_row_meta', __NAMESPACE__ . '\\add_donate_row_meta', 10, 2 );
 function add_donate_row_meta( array $links, string $file ): array {
 	if ( plugin_basename( __FILE__ ) === $file ) {
-		$links[] = '<a href="https://buymeacoffee.com/itsmnlop" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>';
+		$links[] = '<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>';
 	}
 	return $links;
 }

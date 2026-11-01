@@ -132,6 +132,54 @@ explicit field allowlist excludes it); the loopback target is
 `admin_url('admin-ajax.php')` or a developer-only constant/filter override,
 never user-controlled (no SSRF).
 
+## T26 — "Forget Connection" admin action (clears stored credentials)
+
+Vex security audit, 2026-11-01, scoped to the new `wp_ajax_wpthistle_backup_forget_connection`
+action (`Admin::ajax_forget_connection()` -> `Settings::forget_connection()`),
+plus the family-hub version display and the settings-page tab restructure
+bundled in the same diff. **Verdict: CLEAR TO SHIP.** Four LOW findings,
+three fixed same-day, one accepted below.
+
+- **VX-1, `forget_connection()`'s docblock incorrectly claimed a
+  constant-locked CA bundle path isn't stored in `wp_options` (it is;
+  only `app_password` gets that treatment, at `save()` time, per H-02).**
+  Fixed: docblock and the admin-UI description text corrected; behavior
+  was already right (the constant still wins on every read regardless),
+  only the documentation was wrong.
+- **VX-2, the daily/monthly/tiered trigger functions claimed today's/this
+  month's slot BEFORE checking `Settings::has_credentials()`** (the
+  credential check lived only inside `start_claimed_backup()`, after the
+  claim already succeeded). A site with no credentials configured yet,
+  or one that just used Forget Connection, would burn that day's/month's
+  slot with no backup made and no way to retry until the next period.
+  Fixed: `has_credentials()` is now checked first, in
+  `maybe_run_daily_backup()`/`maybe_run_monthly_backup()`/
+  `maybe_run_tiered_backup()`, before any claim is attempted; the
+  original check inside `start_claimed_backup()` stays too, as a second
+  line of defense for the narrow window where credentials are forgotten
+  between that check and the claim itself succeeding. Re-verified against
+  the real stack: `tests/e2e/run-e2e-scheduling.sh` and
+  `tests/e2e/run-e2e-schedule-mode.sh` both still pass in full.
+- **VX-4, the tab-switch "leave without saving" confirm cleared the dirty
+  flag but left the abandoned field edits sitting in the DOM**, so a
+  later Save click from any tab would silently commit them anyway. Fixed:
+  field values are snapshotted after every successful save (and at page
+  load), and "leave without saving" now actually reverts every tracked
+  field back to that last-saved snapshot, not just the dirty flag.
+- **VX-3, accepted as documented behavior, not fixed.** If Forget
+  Connection (or a constant override being removed) clears credentials
+  while a backup job is mid-upload, the next advance step's
+  `Nextcloud_Client` call fails against a blank URL, and `Job_Orchestrator`
+  already marks the job `failed` cleanly (no silent corruption, no
+  `COMPLETE.json` written, so the restore picker never surfaces the
+  partial). The only gap is a less-informative raw WebDAV error instead
+  of a clear "credentials were cleared mid-job" message. Only an admin
+  (`manage_options`) can trigger either half of this, it's self-inflicted,
+  and the failure mode is already safe, not worth the added complexity
+  of a credential-snapshot-at-job-start or a guard at the top of every
+  upload step for a cosmetic error-message improvement. Revisit if this
+  ever causes real confusion in practice.
+
 ## Residual risks accepted for MVP, with owner-visible documentation
 
 - App password at rest in `wp_options` (ADR 0002) unless the operator uses
