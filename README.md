@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="plugin/wpthistle-backup-restore/assets/images/logo-wordmark-color.png" alt="WPThistle" width="450">
+</p>
+
 # WPThistle Backup and Restore
 
 [![CI](https://github.com/WPThistle/wpthistle-backup-restore/actions/workflows/ci.yml/badge.svg)](https://github.com/WPThistle/wpthistle-backup-restore/actions/workflows/ci.yml)
@@ -143,3 +147,7 @@ See `CONTRIBUTING.md`.
 ## License
 
 GPLv2 or later. See `LICENSE`.
+
+---
+
+Free, no paywall, no premium tier. If this plugin is pulling its weight for you, consider [buying a coffee](https://buymeacoffee.com/ItsMNLOP).

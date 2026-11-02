@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.3.0
+Stable tag: 2.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -183,6 +183,9 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.3.1 =
+Cosmetic only, no behavior changes. WPThistle now has a real brand mark: a thistle icon in the admin menu (recolors to match whichever admin color scheme is active), the same icon on the family hub's status card, and a wordmark banner on the plugin's GitHub page. Also added a small "Buy me a coffee" mention to each settings tab (Home, Connection, Backup Schedule, Advanced), worded a little differently on each one, since the plugin stays fully free either way and this is meant to be visible, not pushy.
 
 = 2.3.0 =
 Settings page split into four tabs (Home, Connection, Backup Schedule, Advanced) instead of one long scrolling page; Home now defaults to Manual backup and Restore, since that's what most visits are for once a site is set up. Save Settings has a button on both the Connection and Backup Schedule tabs now, and switching tabs or leaving the page with unsaved changes prompts for confirmation first.

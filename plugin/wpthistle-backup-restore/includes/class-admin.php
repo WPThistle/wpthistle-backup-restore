@@ -82,6 +82,26 @@ class Admin {
 		add_action( 'wp_ajax_wpthistle_backup_delete_download_bundle', array( $this, 'ajax_delete_download_bundle' ) );
 	}
 
+	/**
+	 * The family-hub top-level menu icon: WP recolors a base64 SVG data URI
+	 * to match whichever admin color scheme is active, the same way it
+	 * recolors its own dashicons -- only works with a single-color SVG, which
+	 * is exactly what the monochrome brand mark is for. Falls back to the
+	 * stock dashicon if the bundled file is ever missing (e.g. a corrupted
+	 * manual install), rather than breaking menu registration.
+	 */
+	private function menu_icon_data_uri(): string {
+		$path = WPTHISTLE_BACKUP_DIR . 'assets/images/logo-icon-mono.svg';
+		if ( ! file_exists( $path ) ) {
+			return 'dashicons-shield';
+		}
+		$svg = file_get_contents( $path );
+		if ( false === $svg ) {
+			return 'dashicons-shield';
+		}
+		return 'data:image/svg+xml;base64,' . base64_encode( $svg );
+	}
+
 	public function add_menu(): void {
 		global $menu;
 		$parent_exists = false;
@@ -105,7 +125,7 @@ class Admin {
 				// hub page instead of a dead link, same "first one wins"
 				// rule already governing who creates the parent at all.
 				array( $this, 'render_family_hub' ),
-				'dashicons-shield'
+				$this->menu_icon_data_uri()
 			);
 			// WP auto-adds a submenu item duplicating the parent label/slug;
 			// render_family_hub() above is that page now, so this just
@@ -153,6 +173,12 @@ class Admin {
 								'slug'         => '',
 								'title'        => __( '(untitled)', 'wpthistle-backup-restore' ),
 								'icon'         => 'dashicons-admin-generic',
+								// Optional: a URL to a real icon image, which takes priority
+								// over the dashicons fallback below when present. Lets this
+								// plugin's own card show its brand mark while any other
+								// WPThistle plugin that hasn't set one yet still gets a
+								// sensible dashicon instead of a broken image.
+								'icon_image'   => '',
 								'status_class' => 'neutral',
 								'status_label' => '',
 								'detail'       => '',
@@ -173,7 +199,11 @@ class Admin {
 						?>
 						<a href="<?php echo esc_url( $card['url'] ); ?>" style="display:block;width:280px;padding:16px;border:1px solid #c3c4c7;border-radius:4px;background:#fff;text-decoration:none;color:inherit;">
 							<div style="display:flex;align-items:center;gap:8px;">
-								<span class="dashicons <?php echo esc_attr( $icon ); ?>" style="font-size:20px;"></span>
+								<?php if ( '' !== $card['icon_image'] ) : ?>
+									<img src="<?php echo esc_url( $card['icon_image'] ); ?>" alt="" style="width:24px;height:24px;object-fit:contain;">
+								<?php else : ?>
+									<span class="dashicons <?php echo esc_attr( $icon ); ?>" style="font-size:20px;"></span>
+								<?php endif; ?>
 								<strong style="font-size:14px;"><?php echo esc_html( $card['title'] ); ?></strong>
 							</div>
 							<div style="margin-top:10px;display:flex;align-items:center;gap:6px;">
@@ -215,13 +245,15 @@ class Admin {
 	 * last success.
 	 */
 	public function add_own_status_card( array $cards ): array {
-		$url = admin_url( 'admin.php?page=wpthistle-backup-restore' );
+		$url        = admin_url( 'admin.php?page=wpthistle-backup-restore' );
+		$icon_image = WPTHISTLE_BACKUP_URL . 'assets/images/logo-icon-color.png';
 
 		if ( ! Settings::has_credentials() ) {
 			$cards[] = array(
 				'slug'         => 'backup-restore',
 				'title'        => __( 'Backup and Restore', 'wpthistle-backup-restore' ),
 				'icon'         => 'dashicons-cloud-upload',
+				'icon_image'   => $icon_image,
 				'status_class' => 'neutral',
 				'status_label' => __( 'Not configured', 'wpthistle-backup-restore' ),
 				'detail'       => __( 'Connect a Nextcloud, ownCloud, or OpenCloud server to start backing up.', 'wpthistle-backup-restore' ),
@@ -237,6 +269,7 @@ class Admin {
 				'slug'         => 'backup-restore',
 				'title'        => __( 'Backup and Restore', 'wpthistle-backup-restore' ),
 				'icon'         => 'dashicons-cloud-upload',
+				'icon_image'   => $icon_image,
 				'status_class' => 'warn',
 				'status_label' => __( 'No backup yet', 'wpthistle-backup-restore' ),
 				'detail'       => __( 'Configured -- run your first backup.', 'wpthistle-backup-restore' ),
@@ -259,6 +292,7 @@ class Admin {
 			'slug'         => 'backup-restore',
 			'title'        => __( 'Backup and Restore', 'wpthistle-backup-restore' ),
 			'icon'         => 'dashicons-cloud-upload',
+			'icon_image'   => $icon_image,
 			'status_class' => $status_class,
 			'status_label' => $status_label,
 			/* translators: %s: human-readable time difference, e.g. "2 hours". */
@@ -820,6 +854,15 @@ class Admin {
 			</p>
 			<div id="wpthistle_backup_restore_status" role="status"></div>
 			<pre id="wpthistle_backup_restore_log" style="max-height:300px;overflow:auto;background:#fff;border:1px solid #ccd0d4;padding:8px;"></pre>
+			<p class="description" style="margin-top:24px;">
+				<?php
+				printf(
+					/* translators: %s: "Buy me a coffee" link. */
+					esc_html__( 'If this backup just saved you a bad day, a coffee goes a long way. %s', 'wpthistle-backup-restore' ),
+					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+				);
+				?>
+			</p>
 			</div>
 			<div id="wpthistle_backup_tab_connection" class="wpthistle-backup-tab-panel" style="display:none;">
 			<h2><?php esc_html_e( 'Connection', 'wpthistle-backup-restore' ); ?></h2>
@@ -877,6 +920,15 @@ class Admin {
 			<p class="description"><?php esc_html_e( 'Type FORGET to enable the button above.', 'wpthistle-backup-restore' ); ?></p>
 			<div id="wpthistle_backup_forget_result" role="status"></div>
 
+			<p class="description" style="margin-top:24px;">
+				<?php
+				printf(
+					/* translators: %s: "Buy me a coffee" link. */
+					esc_html__( 'No paywall, no upsells, just a working connection. If that is worth something to you: %s', 'wpthistle-backup-restore' ),
+					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+				);
+				?>
+			</p>
 			</div>
 			<div id="wpthistle_backup_tab_schedule" class="wpthistle-backup-tab-panel" style="display:none;">
 			<h2><?php esc_html_e( 'Backup Schedule', 'wpthistle-backup-restore' ); ?></h2>
@@ -963,6 +1015,15 @@ class Admin {
 			</p>
 			<div id="wpthistle_backup_settings_result" role="status"></div>
 
+			<p class="description" style="margin-top:24px;">
+				<?php
+				printf(
+					/* translators: %s: "Buy me a coffee" link. */
+					esc_html__( 'Set it and forget it, no subscription required. A coffee helps keep it that way: %s', 'wpthistle-backup-restore' ),
+					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+				);
+				?>
+			</p>
 			</div>
 			<div id="wpthistle_backup_tab_advanced" class="wpthistle-backup-tab-panel" style="display:none;">
 			<h2><?php esc_html_e( 'Guaranteed scheduling (optional, advanced)', 'wpthistle-backup-restore' ); ?></h2>
@@ -976,6 +1037,16 @@ class Admin {
 					/* translators: %s: link to cron-job.org. */
 					esc_html__( 'This is entirely optional and happens outside this plugin: create a free account at %s, add a new cron job, paste the URL above as its target, and set it to run every 5-15 minutes. This plugin never contacts cron-job.org or any other outside service itself -- it only reads a request when one arrives at the URL above, from that service or anywhere else. Nothing is sent anywhere unless you set this up yourself, and there is nothing to undo here if you do: to stop, just delete the job on whichever service you used.', 'wpthistle-backup-restore' ),
 					'<a href="https://cron-job.org/en/" target="_blank" rel="noopener noreferrer">cron-job.org</a>'
+				);
+				?>
+			</p>
+
+			<p class="description" style="margin-top:24px;">
+				<?php
+				printf(
+					/* translators: %s: "Buy me a coffee" link. */
+					esc_html__( 'None of this phones home, and none of it ever will. %s', 'wpthistle-backup-restore' ),
+					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
 				);
 				?>
 			</p>

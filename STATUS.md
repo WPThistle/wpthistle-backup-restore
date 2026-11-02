@@ -1,5 +1,35 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## 2.3.1 — brand logo, buymeacoffee mentions on every settings tab, 2026-11-01
+
+Cosmetic only, no behavior changes, no security-relevant surface touched
+(no Vex audit needed for this one).
+
+- the owner supplied a real logo (icon + wordmark, full-color PNG and
+  monochrome SVG, in `plugin/wpthistle-backup-restore/assets/images/`).
+  Wired in: the admin menu icon now uses the monochrome SVG as a base64
+  data URI, which WP recolors to match whichever admin color scheme is
+  active, the same mechanism it uses for its own dashicons. The family
+  hub's status-card contract gained an optional `icon_image` field (falls
+  back to the existing dashicons system for any other WPThistle plugin
+  that hasn't set one), and this plugin's own card now uses the
+  full-color icon. `README.md` got a wordmark banner at the top. Source
+  PNGs were resized from their 1.3MB originals down to practical web
+  sizes (256x256 icon, 900-wide wordmark) before going into the repo.
+- A small "Buy me a coffee" line now appears on all four settings tabs
+  (Home, Connection, Backup Schedule, Advanced), each worded a little
+  differently, plus a footer line on `README.md`. The plugin already had
+  this on the WP Plugins list row-meta, the family hub page, and via
+  readme.txt's `Donate link:` header; this closes the one real gap,
+  which was the settings page itself. Deliberately left off
+  `docs/restore-manual.md`: that doc only gets read mid-disaster, and
+  there's no natural "you're done" moment to hang it on.
+- Verified with a headless-browser pass (Playwright, against
+  wp-restore:8082): zero console/asset errors, menu icon renders
+  correctly recolored, hub card shows the real icon, and all four tabs
+  confirmed to render exactly one coffee link each. 190/190 unit tests,
+  lint clean.
+
 ## 2.3.0 — settings-page tabs, Forget Connection, family-hub version display, 2026-11-01
 
 Version bumped and tagged once the work was actually ready to ship, per
