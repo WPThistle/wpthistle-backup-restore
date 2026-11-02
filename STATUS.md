@@ -1,5 +1,32 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## 2.3.2 — FAQ in the "View details" popup, refreshed wordmark, 2026-11-02
+
+Cosmetic/docs only, no behavior changes, no security-relevant surface
+touched (no Vex audit needed).
+
+- `readme.txt`'s FAQ content previously existed only as source text,
+  nothing in wp-admin ever showed it to a real user. Fixed:
+  `Update_Checker::parse_faq_section()` (pure static transform, directly
+  unit-tested against a crafted readme fixture) parses the bundled
+  readme.txt's `== Frequently Asked Questions ==` section into HTML at
+  runtime and `plugin_info()` adds it as a `faq` section, which
+  WordPress's "View details" popup auto-renders as its own tab, same
+  mechanism as the existing Description/Changelog tabs. An indented
+  block (the Mon-Sun tiered-retention diagram) is detected and kept in a
+  `<pre>` rather than collapsed like normal prose. Verified against the
+  real popup on the live stack (authenticated HTTP fetch of
+  `plugin-install.php?tab=plugin-information`): all 19 FAQ entries
+  present, diagram intact and correctly aligned. 6 new unit tests, added
+  an `esc_html()` stub to `tests/unit/wp-shim.php` (first test in this
+  suite to need it). 196/196 unit tests, lint clean.
+- the owner swapped in an updated full-color wordmark (now matches the
+  circular icon mark) for the `README.md` banner. He also supplied an
+  SVG version of the same wordmark; checked it and it's a raster PNG
+  re-encoded as base64 inside an SVG wrapper, not real vector paths, so
+  it's larger (1.1MB vs. 200KB) with none of SVG's usual benefits.
+  Recommended keeping the PNG; agreed.
+
 ## 2.3.1 — brand logo, buymeacoffee mentions on every settings tab, 2026-11-01
 
 Cosmetic only, no behavior changes, no security-relevant surface touched

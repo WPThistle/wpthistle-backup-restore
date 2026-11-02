@@ -107,6 +107,72 @@ function test_is_trusted_package_url_rejects_trailing_newline() {
 	wpguard_assert( false === Update_Checker::is_trusted_package_url( "https://github.com/WPThistle/wpthistle-backup-restore/releases/download/v1.1.0/wpthistle-backup-restore.zip\n" ), 'a trailing newline must be rejected -- \\z anchors at the true end of string, not just before a trailing newline the way $ would' );
 }
 
+// Powers the "View details" popup's FAQ tab (plugin_info()) -- the
+// readme.txt fixture below mirrors the real file's shape closely enough
+// to exercise it: a question line, a plain prose paragraph, and (for the
+// second entry) an indented diagram block.
+function wpguard_faq_readme_fixture() {
+	return implode( "\n", array(
+		'=== WPThistle Backup and Restore ===',
+		'Contributors: ItsMNLOP',
+		'',
+		'== Description ==',
+		'',
+		'A backup plugin.',
+		'',
+		'== Frequently Asked Questions ==',
+		'',
+		'= Is this free? =',
+		'',
+		'Yes, completely free,',
+		'no catch.',
+		'',
+		'= What does a week look like? =',
+		'',
+		'Picture one backup a day:',
+		'',
+		'  Mon    Tue    Wed',
+		'  B1     B2     B3',
+		'',
+		'That is the whole idea.',
+		'',
+		'== Changelog ==',
+		'',
+		'= 1.0.0 =',
+		'First release.',
+	) );
+}
+
+function test_parse_faq_section_renders_question_as_heading() {
+	$html = Update_Checker::parse_faq_section( wpguard_faq_readme_fixture() );
+	wpguard_assert( str_contains( $html, '<h3>Is this free?</h3>' ), 'the "= Question =" line must become an <h3> heading, with the surrounding = markers stripped' );
+}
+
+function test_parse_faq_section_collapses_soft_line_breaks_in_prose() {
+	$html = Update_Checker::parse_faq_section( wpguard_faq_readme_fixture() );
+	wpguard_assert( str_contains( $html, '<p>Yes, completely free, no catch.</p>' ), 'a plain prose paragraph\'s soft line break must collapse into one line, same as any normal readme.txt paragraph' );
+}
+
+function test_parse_faq_section_preserves_indented_diagram_as_pre() {
+	$html = Update_Checker::parse_faq_section( wpguard_faq_readme_fixture() );
+	wpguard_assert( str_contains( $html, "<pre>  Mon    Tue    Wed\n  B1     B2     B3</pre>" ), 'a paragraph where every line is indented must be kept verbatim in a <pre>, not collapsed like prose' );
+}
+
+function test_parse_faq_section_includes_every_entry() {
+	$html = Update_Checker::parse_faq_section( wpguard_faq_readme_fixture() );
+	wpguard_assert( str_contains( $html, '<h3>What does a week look like?</h3>' ), 'a second FAQ entry must also be included, not just the first' );
+}
+
+function test_parse_faq_section_stops_before_the_next_top_level_section() {
+	$html = Update_Checker::parse_faq_section( wpguard_faq_readme_fixture() );
+	wpguard_assert( ! str_contains( $html, 'First release' ), 'content from the next == section == (Changelog, in this fixture) must never bleed into the FAQ HTML' );
+}
+
+function test_parse_faq_section_returns_empty_string_when_no_faq_section_exists() {
+	$readme = "=== Some Other Plugin ===\n\n== Description ==\n\nNo FAQ here.\n\n== Changelog ==\n\n= 1.0.0 =\nFirst release.";
+	wpguard_assert_equals( '', Update_Checker::parse_faq_section( $readme ), 'a readme.txt with no FAQ section at all must return an empty string, not an error or partial markup' );
+}
+
 return array(
 	'test_select_package_asset_picks_matching_zip',
 	'test_select_package_asset_ignores_non_matching_assets',
@@ -128,4 +194,10 @@ return array(
 	'test_is_trusted_package_url_rejects_query_string_injection',
 	'test_is_trusted_package_url_rejects_fragment_injection',
 	'test_is_trusted_package_url_rejects_trailing_newline',
+	'test_parse_faq_section_renders_question_as_heading',
+	'test_parse_faq_section_collapses_soft_line_breaks_in_prose',
+	'test_parse_faq_section_preserves_indented_diagram_as_pre',
+	'test_parse_faq_section_includes_every_entry',
+	'test_parse_faq_section_stops_before_the_next_top_level_section',
+	'test_parse_faq_section_returns_empty_string_when_no_faq_section_exists',
 );

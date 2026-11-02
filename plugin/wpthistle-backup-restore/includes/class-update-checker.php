@@ -81,6 +81,64 @@ class Update_Checker {
 	}
 
 	/**
+	 * Pure transform: the bundled readme.txt's own "== Frequently Asked
+	 * Questions ==" section (standard WP.org readme format: a "= Question =" line
+	 * per entry, answer text until the next one) -> the HTML WordPress'
+	 * "View details" popup expects for a section. No WP or file-system
+	 * calls, so this is directly unit-testable against a crafted string;
+	 * plugin_info() below is what actually reads readme.txt off disk.
+	 *
+	 * readme.txt is this plugin's own bundled file (same trust level as
+	 * the plugin code itself, not third-party input), so plain esc_html()
+	 * is enough here -- unlike the GitHub release body used for the
+	 * 'changelog' section below, which goes through wp_kses_post()
+	 * instead because it's attacker-reachable by anyone who can push a
+	 * release to this repo.
+	 *
+	 * A paragraph where every non-blank line starts with at least two
+	 * spaces of indentation is treated as a preformatted block (e.g. the
+	 * Mon-Sun diagram in the tiered-retention FAQ entry) and wrapped in
+	 * <pre> to keep its alignment; every other paragraph has its soft line
+	 * breaks collapsed into one line, same as any normal prose paragraph.
+	 */
+	public static function parse_faq_section( string $readme_contents ): string {
+		if ( ! preg_match( '/^== Frequently Asked Questions ==\s*$(.*?)^== /ms', $readme_contents, $section_match ) ) {
+			return '';
+		}
+
+		$entries = preg_split( '/^= (.+?) =\s*$/m', $section_match[1], -1, PREG_SPLIT_DELIM_CAPTURE );
+		// The chunk before the first "= Question =" line (normally just
+		// blank lines) carries no question, so it's discarded.
+		array_shift( $entries );
+
+		$html = '';
+		for ( $i = 0; $i + 1 < count( $entries ); $i += 2 ) {
+			$question = trim( $entries[ $i ] );
+			$answer   = trim( $entries[ $i + 1 ] );
+			if ( '' === $question ) {
+				continue;
+			}
+			$html .= '<h3>' . esc_html( $question ) . '</h3>';
+			foreach ( preg_split( '/\n\s*\n/', $answer ) as $paragraph ) {
+				$lines = explode( "\n", $paragraph );
+				$is_preformatted = true;
+				foreach ( $lines as $line ) {
+					if ( '' !== trim( $line ) && ! preg_match( '/^\s{2,}/', $line ) ) {
+						$is_preformatted = false;
+						break;
+					}
+				}
+				if ( $is_preformatted ) {
+					$html .= '<pre>' . esc_html( implode( "\n", $lines ) ) . '</pre>';
+				} else {
+					$html .= '<p>' . esc_html( implode( ' ', array_map( 'trim', $lines ) ) ) . '</p>';
+				}
+			}
+		}
+		return $html;
+	}
+
+	/**
 	 * Pure. security audit finding L-001: a cached/API-sourced package URL must be
 	 * confirmed to actually point at THIS repo's own release assets
 	 * before it's ever handed to WP core's installer -- a host-only
@@ -232,6 +290,13 @@ class Update_Checker {
 			// rather than trusting it implicitly.
 			'changelog'   => wpautop( wp_kses_post( $release['body'] ) ),
 		);
+		$readme_path = WPTHISTLE_BACKUP_DIR . 'readme.txt';
+		if ( file_exists( $readme_path ) ) {
+			$faq = self::parse_faq_section( (string) file_get_contents( $readme_path ) );
+			if ( '' !== $faq ) {
+				$info->sections['faq'] = $faq;
+			}
+		}
 		return $info;
 	}
 }
