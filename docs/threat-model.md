@@ -180,6 +180,70 @@ three fixed same-day, one accepted below.
   upload step for a cosmetic error-message improvement. Revisit if this
   ever causes real confusion in practice.
 
+## T27 — Multi-channel Notifications (Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, generic webhook)
+
+Vex security audit, 2026-11-02, scoped to `class-notifications.php`, the
+new `notify_*` settings fields, the Notifications settings tab, the new
+`wp_ajax_wpthistle_backup_notify_test` endpoint, and the dispatch call
+sites in `Job_Orchestrator`. **Verdict: no BLOCKED or CRITICAL findings.**
+Four LOW findings, two fixed same-day, two accepted below; two INFO notes.
+
+- **LOW-N-01, `send_request()`'s `array_merge()` put the security
+  defaults first**, so a future channel builder's own `$args` could
+  silently override `redirection => 0` (the setting that stops a 3xx
+  response from carrying an Authorization/Access-Token header, or a
+  token embedded in the URL path, to a different host). No channel
+  builder actually does this today. Fixed: merge order reversed so the
+  security values always win regardless of what a builder passes.
+- **LOW-N-02, `Logger`'s redaction list held the raw form of the
+  Telegram bot token and Gotify app token, not the `rawurlencode()`'d
+  form both are actually embedded in their request URL as** (`:` and
+  `/` become `%3A`/`%2F`). A log entry containing the constructed URL
+  would not have had the token caught by `str_replace()` against the
+  raw value. The real exposure was already near-zero, since
+  `send_request()` deliberately never logs a URL in the first place,
+  this was defense-in-depth catching up to its own documented reason
+  for existing. Fixed: both forms are now listed in
+  `Notifications::all_secret_values()`; covered by a new unit test.
+- **LOW-N-03, accepted, not fixed.** There is no way to clear a
+  notification credential to blank, only overwrite it (same
+  blank-keeps-current design as `app_password`, by necessity, since
+  every Save button submits the whole form and a masked field always
+  submits blank unless retyped). An admin who wants to revoke a leaked
+  webhook/token must do so at the provider and save a replacement; they
+  can't blank it from this plugin alone the way `forget_connection()`
+  lets them for the Nextcloud connection. Accepted because the admin
+  remains in full control of revocation at the source, and because
+  building a `forget_connection()`-style dedicated clear action for
+  each of 8 channels is a real chunk of added UI/code for a need that's
+  already served (if more awkwardly) by the provider's own revoke flow.
+  Revisit if this becomes a real point of friction in practice.
+- **LOW-N-04, accepted, not fixed.** `ajax_notify_test` has no rate
+  limit beyond the standard capability+nonce gate every privileged
+  action already uses. A stolen session could script repeated test
+  dispatches to burn third-party API quota (Pushover documents
+  10,000 messages/month per API token) and a few seconds of PHP
+  execution time per call. Accepted for now since the blast radius
+  (quota exhaustion, not data exposure) is low and the access required
+  (a valid authenticated admin session) already permits far more
+  damaging actions; a transient-based per-user cooldown is a cheap
+  follow-up if this ever proves to matter in practice.
+- **INFO-N-01 (fixed): the Notifications tab's disclosure banner and
+  the matching FAQ entry undersold what actually gets sent.** Both
+  omitted the settings-page link every channel receives and the plugin
+  version the generic webhook additionally receives. Copy corrected in
+  both places to list everything actually sent.
+- **INFO-N-02, documented, not a gap today:** `step_bundle_local()`
+  (the local-download backup path) never calls
+  `maybe_send_scheduled_alert()`, so a scheduled backup that somehow
+  used destination=download would complete without notifying. Currently
+  unreachable: every scheduled trigger (`start_claimed_backup()`) only
+  ever creates a destination='nextcloud' job; destination=download is
+  only ever chosen via the manual "Download Now" button, which is
+  always origin='manual' and therefore never notifies regardless.
+  Revisit only if scheduled download-destination backups are ever
+  built.
+
 ## Residual risks accepted for MVP, with owner-visible documentation
 
 - App password at rest in `wp_options` (ADR 0002) unless the operator uses

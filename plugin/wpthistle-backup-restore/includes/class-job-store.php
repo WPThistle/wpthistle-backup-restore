@@ -39,6 +39,8 @@ class Job_Store {
 			updated_at DATETIME NOT NULL,
 			advance_token VARCHAR(64) NULL,
 			advance_chain_count INT NOT NULL DEFAULT 0,
+			origin VARCHAR(16) NOT NULL DEFAULT 'manual',
+			alert_sent TINYINT(1) NOT NULL DEFAULT 0,
 			PRIMARY KEY  (job_id)
 		) {$charset_collate};";
 		dbDelta( $sql );
@@ -68,7 +70,16 @@ class Job_Store {
 	 * NOT YET SECURITY-AUDITED; flagged there for a Vex pass before this
 	 * is considered production-ready.
 	 */
-	public static function create( string $job_id, string $backup_id, string $destination = 'nextcloud' ): void {
+	/**
+	 * $origin ('manual' default, or 'scheduled' for a job started by one
+	 * of the three automatic trigger functions) decides whether
+	 * Job_Orchestrator::maybe_send_scheduled_alert() ever considers this
+	 * job for an email alert on completion. A manually-started backup
+	 * is something the admin is already watching in real time, so it's
+	 * deliberately never alerted on, same reasoning as why only
+	 * scheduled runs need it in the first place.
+	 */
+	public static function create( string $job_id, string $backup_id, string $destination = 'nextcloud', string $origin = 'manual' ): void {
 		global $wpdb;
 		$wpdb->insert(
 			self::table_name(),
@@ -83,9 +94,28 @@ class Job_Store {
 				'created_at'    => current_time( 'mysql', true ),
 				'updated_at'    => current_time( 'mysql', true ),
 				'advance_token' => bin2hex( random_bytes( 32 ) ),
+				'origin'        => $origin,
 			),
-			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
+	}
+
+	/**
+	 * Atomic claim (same UPDATE-WHERE-still-unclaimed idiom as
+	 * claim_today()/claim_month() in the main plugin file): true only for
+	 * whichever request actually flips alert_sent from 0 to 1, so a
+	 * concurrent/racing advance of the same job can never send the same
+	 * email twice.
+	 */
+	public static function claim_alert( string $job_id ): bool {
+		global $wpdb;
+		$affected = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE ' . self::table_name() . ' SET alert_sent = 1 WHERE job_id = %s AND alert_sent = 0',
+				$job_id
+			)
+		);
+		return $affected > 0;
 	}
 
 	public static function get( string $job_id ): ?array {

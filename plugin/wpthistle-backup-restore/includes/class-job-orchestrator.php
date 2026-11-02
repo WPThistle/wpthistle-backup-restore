@@ -203,8 +203,9 @@ class Job_Orchestrator {
 		return 'wpthistle_backup_create_' . substr( md5( Settings::get_site_id() ), 0, 20 );
 	}
 
-	public static function create_job( string $destination = 'nextcloud' ): string {
+	public static function create_job( string $destination = 'nextcloud', string $origin = 'manual' ): string {
 		$destination = in_array( $destination, array( 'nextcloud', 'download' ), true ) ? $destination : 'nextcloud';
+		$origin = in_array( $origin, array( 'manual', 'scheduled' ), true ) ? $origin : 'manual';
 		self::reap_stale_lock();
 
 		global $wpdb;
@@ -231,7 +232,7 @@ class Job_Orchestrator {
 			$job_id = 'job-' . bin2hex( random_bytes( 8 ) );
 			$backup_id = gmdate( 'Ymd\THis\Z' ) . '-' . bin2hex( random_bytes( 4 ) );
 			wp_mkdir_p( self::tmp_dir_for( $backup_id ) );
-			Job_Store::create( $job_id, $backup_id, $destination );
+			Job_Store::create( $job_id, $backup_id, $destination, $origin );
 			return $job_id;
 		} finally {
 			$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_name ) );
@@ -302,7 +303,12 @@ class Job_Orchestrator {
 	}
 
 	private static function logger(): Logger {
-		return new Logger( array( Settings::get_app_password() ) );
+		// Every notification channel's credential is included here as
+		// defense in depth. Notifications::send_request() already
+		// deliberately logs only a channel name and HTTP code, never the
+		// raw failure, but a value here is stripped on sight from
+		// anything that ever does make it into a log entry regardless.
+		return new Logger( array_merge( array( Settings::get_app_password() ), Notifications::all_secret_values() ) );
 	}
 
 	private static function log( string $job_id, string $step, string $severity, string $message, array $context = array() ): void {
@@ -355,6 +361,45 @@ class Job_Orchestrator {
 		}
 	}
 
+	/**
+	 * Called right after a job reaches a terminal state (verified or
+	 * failed); see fail() and step_finalize() below for the two call
+	 * sites. A manually-started backup (origin 'manual', the default) is
+	 * something the admin is already watching in real time on the
+	 * settings page, so this deliberately only ever fires for a
+	 * 'scheduled'-origin job. claim_alert()'s atomic UPDATE is what
+	 * guards against a double-send if two requests somehow observe the
+	 * same terminal transition. Notifications::dispatch_all() does the
+	 * actual per-channel sending; only the channel name and outcome are
+	 * logged here, never anything from inside a failure reason, since
+	 * Notifications itself already keeps that generic (see its own
+	 * docblock) -- logger() below still carries every channel's secret
+	 * as defense in depth regardless.
+	 */
+	private static function maybe_send_scheduled_alert( ?array $job ): void {
+		if ( null === $job || 'scheduled' !== ( $job['origin'] ?? 'manual' ) ) {
+			return;
+		}
+		$ok = 'verified' === $job['status'];
+		if ( ! $ok && 'failed' !== $job['status'] ) {
+			return;
+		}
+		if ( $ok ? ! Settings::get_notify_on_success() : ! Settings::get_notify_on_failure() ) {
+			return;
+		}
+		if ( ! Job_Store::claim_alert( $job['job_id'] ) ) {
+			return;
+		}
+		$results = Notifications::dispatch_all( $job );
+		$summary = array();
+		foreach ( $results as $channel => $outcome ) {
+			$summary[] = true === $outcome ? "{$channel} ok" : "{$channel} {$outcome}";
+		}
+		if ( ! empty( $summary ) ) {
+			self::log( $job['job_id'], 'notify', 'info', 'Notifications: ' . implode( ', ', $summary ) );
+		}
+	}
+
 	private static function fail( string $job_id, string $step, string $message ): array {
 		$safe = self::logger()->redact( $message );
 		self::log( $job_id, $step, 'error', $safe );
@@ -369,6 +414,7 @@ class Job_Orchestrator {
 			self::upload_diagnostic_log( $job['backup_id'], $job['log'] ?? array(), $job['destination'] ?? 'nextcloud' );
 			self::cleanup_tmp( self::tmp_dir_for( $job['backup_id'] ) );
 		}
+		self::maybe_send_scheduled_alert( $job );
 		return $job;
 	}
 
@@ -1186,6 +1232,7 @@ class Job_Orchestrator {
 		self::cleanup_tmp( $tmp );
 		self::log( $job_id, 'finalize', 'info', 'Backup verified and complete.' );
 		Job_Store::update( $job_id, array( 'status' => 'verified', 'step' => 'done', 'advance_token' => null ) );
+		$updated_job = Job_Store::get( $job_id );
 		// Phase 2 (incremental backups): only ever advances/resets local
 		// chain state once a job is already verified -- a failed job
 		// must never affect what the next job decides, same discipline
@@ -1194,7 +1241,13 @@ class Job_Orchestrator {
 			Backup_Chain::record_result( $cp['chain'], $job['backup_id'] );
 		}
 		self::maybe_prune_old_backups( $job_id, $client );
-		return Job_Store::get( $job_id );
+		// Notifications run last, deliberately: up to 8 third-party
+		// channels can be enabled, dispatched one after another, and
+		// none of that should be able to delay the chain-state/retention
+		// bookkeeping above. A slow or hanging notification channel
+		// must never risk those not running.
+		self::maybe_send_scheduled_alert( $updated_job );
+		return $updated_job;
 	}
 
 	/**

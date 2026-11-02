@@ -169,6 +169,21 @@ class Update_Checker {
 		return 1 === preg_match( $pattern, $url );
 	}
 
+	/**
+	 * The color brand mark, reused as-is for 1x/2x/default rather than
+	 * shipping separate @2x art -- WP core only ever renders this at
+	 * icon size (the Updates page row, the plugin-information popup),
+	 * so one reasonably sized source image covers both densities fine.
+	 */
+	private static function icons(): array {
+		$url = WPTHISTLE_BACKUP_URL . 'assets/images/logo-icon-color.png';
+		return array(
+			'1x'      => $url,
+			'2x'      => $url,
+			'default' => $url,
+		);
+	}
+
 	private function fetch_latest_release(): ?array {
 		$cached = get_transient( self::CACHE_KEY );
 		if ( is_array( $cached ) ) {
@@ -249,6 +264,7 @@ class Update_Checker {
 		$item->url          = $release['html_url'];
 		$item->package      = $release['package'];
 		$item->requires_php = '8.1';
+		$item->icons        = self::icons();
 
 		$transient->response[ $this->plugin_basename ] = $item;
 		return $transient;
@@ -281,6 +297,7 @@ class Update_Checker {
 		$info->requires      = '6.4';
 		$info->requires_php  = '8.1';
 		$info->download_link = self::is_trusted_package_url( $release['package'] ) ? $release['package'] : '';
+		$info->icons         = self::icons();
 		$info->sections      = array(
 			'description' => 'Backs up this WordPress site (files + database) to a user-controlled Nextcloud, ownCloud, or OpenCloud server over authenticated HTTPS WebDAV -- or straight to your browser with zero cloud dependency -- with one-click restore.',
 			// Release body is attacker-controllable only by whoever can push

@@ -4,7 +4,7 @@
  * Plugin URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Update URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Description:       Creates recoverable backups of this WordPress site (files + database) and transfers them to a user-controlled Nextcloud, ownCloud, or OpenCloud server over authenticated HTTPS WebDAV -- or packages them straight to your browser with zero cloud dependency. Manual or scheduled backups, retention pruning, and one-click in-place restore from either a configured server destination or an uploaded backup bundle.
- * Version:           2.3.2
+ * Version:           2.4.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            WPThistle project
@@ -57,7 +57,7 @@ define( 'WPTHISTLE_BACKUP_RESTORE_BOOTSTRAPPED', __FILE__ );
 // still fatals with "Cannot redeclare function ...".
 if ( true ) {
 
-define( 'WPTHISTLE_BACKUP_VERSION', '2.3.2' );
+define( 'WPTHISTLE_BACKUP_VERSION', '2.4.0' );
 // Phase 2 (incremental backups): bumped 1 -> 2. Every manifest this
 // plugin writes from here on -- full or incremental alike -- carries
 // new backup_mode/base_backup_id/parent_backup_id/files fields.
@@ -75,7 +75,7 @@ define( 'WPTHISTLE_BACKUP_URL', plugin_dir_url( __FILE__ ) );
 // Phase 5 (self-chaining job advance): bumped 2 -> 3, adds the jobs
 // table's own advance_token/advance_chain_count columns (see
 // class-job-store.php's create() docblock).
-define( 'WPTHISTLE_BACKUP_DB_SCHEMA_VERSION', 3 );
+define( 'WPTHISTLE_BACKUP_DB_SCHEMA_VERSION', 4 );
 
 spl_autoload_register(
 	function ( $class ) {
@@ -414,7 +414,7 @@ function maybe_run_scheduled_backup(): void {
 /** Shared tail end of every trigger above, once its own period is successfully claimed. */
 function start_claimed_backup(): void {
 	if ( Settings::has_credentials() ) {
-		$job_id = Job_Orchestrator::create_job();
+		$job_id = Job_Orchestrator::create_job( 'nextcloud', 'scheduled' );
 		if ( '' !== $job_id ) {
 			wp_schedule_single_event( time() + 5, 'wpthistle_backup_cron_advance', array( $job_id ) );
 		}

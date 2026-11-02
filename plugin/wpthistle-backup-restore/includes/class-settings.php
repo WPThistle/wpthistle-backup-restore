@@ -110,6 +110,45 @@ class Settings {
 			'retention_weekly'  => self::DEFAULT_RETENTION_WEEKLY,
 			'retention_monthly' => self::DEFAULT_RETENTION_MONTHLY,
 			'incremental_enabled' => false,
+			// Scheduled-backup notifications (Job_Orchestrator::maybe_send_scheduled_alert(),
+			// Notifications::dispatch_all()). notify_on_failure/notify_on_success
+			// are the "when" that only matters once at least one channel
+			// below is actually turned on: failure defaults ON (a silent
+			// failure is the whole problem this exists to catch) once
+			// notifications are in use at all, success defaults OFF
+			// (most admins don't want a daily "it worked" message).
+			// Every channel below, email included, defaults OFF. The
+			// whole feature is opt-in, nothing fires until the admin
+			// deliberately turns something on, email is not a silent
+			// special case just because it needs no extra setup. Every
+			// *_enabled flag is a plain checkbox (self::save_checkbox());
+			// every credential field is blank-keeps-current, never
+			// cleared by an empty submission (self::save_secret_field()),
+			// same discipline as app_password above, since a full-form
+			// save from any tab would otherwise wipe these.
+			'notify_on_failure' => true,
+			'notify_on_success' => false,
+			'notify_email_enabled' => false,
+			'notify_discord_enabled' => false,
+			'notify_discord_webhook_url' => '',
+			'notify_slack_enabled' => false,
+			'notify_slack_webhook_url' => '',
+			'notify_pushover_enabled' => false,
+			'notify_pushover_user_key' => '',
+			'notify_pushover_api_token' => '',
+			'notify_pushbullet_enabled' => false,
+			'notify_pushbullet_access_token' => '',
+			'notify_ntfy_enabled' => false,
+			'notify_ntfy_url' => '',
+			'notify_ntfy_token' => '',
+			'notify_gotify_enabled' => false,
+			'notify_gotify_url' => '',
+			'notify_gotify_token' => '',
+			'notify_telegram_enabled' => false,
+			'notify_telegram_bot_token' => '',
+			'notify_telegram_chat_id' => '',
+			'notify_webhook_enabled' => false,
+			'notify_webhook_url' => '',
 		);
 		$merged = array_merge( $defaults, $stored );
 		// Phase 6 migration: schedule_mode didn't exist before this
@@ -137,6 +176,34 @@ class Settings {
 	 */
 	public static function get_incremental_enabled(): bool {
 		return (bool) self::get_all()['incremental_enabled'];
+	}
+
+	/** Notify (every enabled channel) when a SCHEDULED backup fails. Only ever consulted for a 'scheduled'-origin job, never a manual one. */
+	public static function get_notify_on_failure(): bool {
+		return (bool) self::get_all()['notify_on_failure'];
+	}
+
+	/** Notify (every enabled channel) when a SCHEDULED backup succeeds. Off by default, opt-in only, not everyone wants a routine "it worked" message. */
+	public static function get_notify_on_success(): bool {
+		return (bool) self::get_all()['notify_on_success'];
+	}
+
+	/**
+	 * Which notification channels are enabled, keyed the same as
+	 * Notifications::CHANNELS. Just the on/off flags; each channel's
+	 * own credential fields are read straight off get_all() by
+	 * Notifications itself, there's no validation to centralize behind a
+	 * getter for a plain string.
+	 */
+	public static function get_enabled_notification_channels(): array {
+		$all = self::get_all();
+		$enabled = array();
+		foreach ( array( 'email', 'discord', 'slack', 'pushover', 'pushbullet', 'ntfy', 'gotify', 'telegram', 'webhook' ) as $channel ) {
+			if ( ! empty( $all[ "notify_{$channel}_enabled" ] ) ) {
+				$enabled[] = $channel;
+			}
+		}
+		return $enabled;
 	}
 
 	public static function get_backend(): string {
@@ -282,6 +349,51 @@ class Settings {
 			&& '' !== self::get_app_password();
 	}
 
+	/** Pure: a plain checkbox field, same semantics every boolean setting in this class uses (present+truthy = on, absent = off, since a browser never submits an unchecked checkbox at all). */
+	private static function save_checkbox( array $input, string $key ): bool {
+		return ! empty( $input[ $key ] );
+	}
+
+	/**
+	 * Pure: whether a notification channel's URL is acceptable to store.
+	 * https-only, no private-IP/hostname blocklist, same reasoning as
+	 * nextcloud_url (see is_syntactically_valid_destination_url()'s own
+	 * callers): a self-hosted ntfy/Gotify server or a custom webhook
+	 * listener is routinely on a LAN address or a hostname that would
+	 * trip a generic SSRF blocklist, and the admin who configured this
+	 * plugin at all already has whatever access that would grant. Discord
+	 * and Slack additionally only ever accept their own real webhook
+	 * hosts, since nothing else is ever a legitimate value there.
+	 */
+	private static function validate_notification_url( string $url, array $allowed_hosts = array() ): bool {
+		if ( 0 !== strpos( $url, 'https://' ) ) {
+			return false;
+		}
+		if ( ! self::is_syntactically_valid_destination_url( $url ) ) {
+			return false;
+		}
+		if ( empty( $allowed_hosts ) ) {
+			return true;
+		}
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		return in_array( $host, $allowed_hosts, true );
+	}
+
+	/**
+	 * Pure: a credential field where a blank submission means "leave
+	 * unchanged", same rule app_password already follows above. Needed
+	 * for every notification channel's webhook URL/token/key, since each
+	 * one is rendered masked (password-type, never echoing the real
+	 * value back), so the browser always submits it blank unless the
+	 * admin actually retyped it. Without this, saving from ANY tab
+	 * (every Save button submits the whole form) would silently wipe
+	 * every credential on every OTHER tab's fields it doesn't show.
+	 */
+	private static function save_secret_field( array $input, array $current, string $key ): string {
+		$submitted = isset( $input[ $key ] ) ? (string) $input[ $key ] : '';
+		return ( '' === $submitted ) ? (string) ( $current[ $key ] ?? '' ) : $submitted;
+	}
+
 	/**
 	 * Validate and persist admin-submitted settings.
 	 *
@@ -424,6 +536,66 @@ class Settings {
 		// no "unrecognized value" case to clamp here, unlike schedule/
 		// retention_count above.
 		$clean['incremental_enabled'] = ! empty( $input['incremental_enabled'] );
+
+		// Same plain-checkbox convention as incremental_enabled above.
+		$clean['notify_on_failure'] = self::save_checkbox( $input, 'notify_on_failure' );
+		$clean['notify_on_success'] = self::save_checkbox( $input, 'notify_on_success' );
+		$clean['notify_email_enabled'] = self::save_checkbox( $input, 'notify_email_enabled' );
+
+		// Every notification channel's credential field(s): blank means
+		// "leave unchanged" (self::save_secret_field(), same rule as
+		// app_password above), never "clear it". The full-form save
+		// every Save button does would otherwise wipe these the moment
+		// any OTHER tab is saved, since a secret field is deliberately
+		// never rendered back with its real value (it's a password-type
+		// input, masked, so the browser always submits it blank unless
+		// the admin retyped it).
+		$clean['notify_discord_enabled'] = self::save_checkbox( $input, 'notify_discord_enabled' );
+		$clean['notify_discord_webhook_url'] = self::save_secret_field( $input, $current, 'notify_discord_webhook_url' );
+		if ( '' !== $clean['notify_discord_webhook_url'] && ! self::validate_notification_url( $clean['notify_discord_webhook_url'], array( 'discord.com', 'discordapp.com' ) ) ) {
+			$errors['notify_discord_webhook_url'] = __( 'That does not look like a real Discord webhook URL (must be an https://discord.com or https://discordapp.com link).', 'wpthistle-backup-restore' );
+		}
+
+		$clean['notify_slack_enabled'] = self::save_checkbox( $input, 'notify_slack_enabled' );
+		$clean['notify_slack_webhook_url'] = self::save_secret_field( $input, $current, 'notify_slack_webhook_url' );
+		if ( '' !== $clean['notify_slack_webhook_url'] && ! self::validate_notification_url( $clean['notify_slack_webhook_url'], array( 'hooks.slack.com' ) ) ) {
+			$errors['notify_slack_webhook_url'] = __( 'That does not look like a real Slack webhook URL (must be an https://hooks.slack.com link).', 'wpthistle-backup-restore' );
+		}
+
+		$clean['notify_pushover_enabled'] = self::save_checkbox( $input, 'notify_pushover_enabled' );
+		$clean['notify_pushover_user_key'] = self::save_secret_field( $input, $current, 'notify_pushover_user_key' );
+		$clean['notify_pushover_api_token'] = self::save_secret_field( $input, $current, 'notify_pushover_api_token' );
+
+		$clean['notify_pushbullet_enabled'] = self::save_checkbox( $input, 'notify_pushbullet_enabled' );
+		$clean['notify_pushbullet_access_token'] = self::save_secret_field( $input, $current, 'notify_pushbullet_access_token' );
+
+		$clean['notify_ntfy_enabled'] = self::save_checkbox( $input, 'notify_ntfy_enabled' );
+		$clean['notify_ntfy_url'] = self::save_secret_field( $input, $current, 'notify_ntfy_url' );
+		if ( '' !== $clean['notify_ntfy_url'] && ! self::validate_notification_url( $clean['notify_ntfy_url'] ) ) {
+			$errors['notify_ntfy_url'] = __( 'ntfy topic URL must start with https:// and be a valid URL.', 'wpthistle-backup-restore' );
+		}
+		$clean['notify_ntfy_token'] = self::save_secret_field( $input, $current, 'notify_ntfy_token' );
+
+		$clean['notify_gotify_enabled'] = self::save_checkbox( $input, 'notify_gotify_enabled' );
+		// Gotify's server URL is a plain address, not a credential by
+		// itself (same category as nextcloud_url), rendered and
+		// submitted plainly, no blank-keeps-current needed.
+		$clean['notify_gotify_url'] = isset( $input['notify_gotify_url'] ) ? rtrim( trim( (string) $input['notify_gotify_url'] ), '/' ) : '';
+		if ( '' !== $clean['notify_gotify_url'] && ! self::validate_notification_url( $clean['notify_gotify_url'] ) ) {
+			$errors['notify_gotify_url'] = __( 'Gotify server URL must start with https:// and be a valid URL.', 'wpthistle-backup-restore' );
+		}
+		$clean['notify_gotify_token'] = self::save_secret_field( $input, $current, 'notify_gotify_token' );
+
+		$clean['notify_telegram_enabled'] = self::save_checkbox( $input, 'notify_telegram_enabled' );
+		$clean['notify_telegram_bot_token'] = self::save_secret_field( $input, $current, 'notify_telegram_bot_token' );
+		// Chat ID is just an identifier, not a credential by itself.
+		$clean['notify_telegram_chat_id'] = isset( $input['notify_telegram_chat_id'] ) ? trim( (string) $input['notify_telegram_chat_id'] ) : '';
+
+		$clean['notify_webhook_enabled'] = self::save_checkbox( $input, 'notify_webhook_enabled' );
+		$clean['notify_webhook_url'] = self::save_secret_field( $input, $current, 'notify_webhook_url' );
+		if ( '' !== $clean['notify_webhook_url'] && ! self::validate_notification_url( $clean['notify_webhook_url'] ) ) {
+			$errors['notify_webhook_url'] = __( 'Webhook URL must start with https:// and be a valid URL.', 'wpthistle-backup-restore' );
+		}
 
 		if ( ! empty( $errors ) ) {
 			return array( 'ok' => false, 'errors' => $errors );

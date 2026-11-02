@@ -235,6 +235,167 @@ function test_incremental_accepts_enabled() {
 	wpguard_assert( true === Settings::get_incremental_enabled(), 'incremental_enabled must be stored and read back as enabled' );
 }
 
+// Scheduled-backup notifications: failure defaults ON (a silent failure
+// is the whole gap this closes), success defaults OFF (opt-in only).
+// Those defaults only apply before the settings have ever been saved --
+// once a real save happens, an omitted checkbox means "unchecked", same
+// convention as incremental_enabled above, not "keep defaulting forever".
+
+function test_notify_on_failure_defaults_enabled_before_any_save() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	wpguard_assert( true === Settings::get_notify_on_failure(), 'a fresh install with no settings ever saved must default to failure notifications ON' );
+}
+
+function test_notify_on_success_defaults_disabled_before_any_save() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	wpguard_assert( false === Settings::get_notify_on_success(), 'a fresh install with no settings ever saved must default to success notifications OFF' );
+}
+
+function test_notify_on_failure_omitted_after_a_real_save_means_disabled() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw' ) );
+	wpguard_assert( true === $result['ok'], 'save without a notify_on_failure field must still succeed' );
+	wpguard_assert( false === Settings::get_notify_on_failure(), 'once a real save happens, an omitted notify_on_failure checkbox must mean unchecked, same as any other checkbox field, not silently keep the pre-save default' );
+}
+
+function test_notify_on_failure_and_success_accept_enabled() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array( 'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw', 'notify_on_failure' => '1', 'notify_on_success' => '1' ) );
+	wpguard_assert( true === $result['ok'], 'truthy notify_on_failure/notify_on_success must be accepted' );
+	wpguard_assert( true === Settings::get_notify_on_failure(), 'notify_on_failure must be stored and read back as enabled' );
+	wpguard_assert( true === Settings::get_notify_on_success(), 'notify_on_success must be stored and read back as enabled' );
+}
+
+// Notification channels: email defaults on (it needs no setup), every
+// every channel, email included, defaults off (the whole feature is
+// opt-in, nothing fires until the admin deliberately turns something
+// on), and every credential field follows the same blank-keeps-current
+// rule as app_password, since every Save button submits the whole form.
+
+function test_every_notification_channel_defaults_disabled() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	wpguard_assert( array() === Settings::get_enabled_notification_channels(), 'a fresh install must have NO notification channel enabled, email included, since the feature is fully opt-in' );
+}
+
+function test_notify_channel_secret_fields_save_when_provided() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://discord.com/api/webhooks/123/abc',
+		'notify_telegram_enabled' => '1', 'notify_telegram_bot_token' => '123:ABC', 'notify_telegram_chat_id' => '98765',
+	) );
+	wpguard_assert( true === $result['ok'], 'save with notification channel fields must succeed' );
+	$all = Settings::get_all();
+	wpguard_assert_equals( 'https://discord.com/api/webhooks/123/abc', $all['notify_discord_webhook_url'], 'Discord webhook URL must be stored as submitted' );
+	wpguard_assert_equals( '123:ABC', $all['notify_telegram_bot_token'], 'Telegram bot token must be stored as submitted' );
+	wpguard_assert_equals( '98765', $all['notify_telegram_chat_id'], 'Telegram chat ID must be stored as submitted' );
+	wpguard_assert( in_array( 'discord', Settings::get_enabled_notification_channels(), true ), 'discord must be reported as enabled' );
+	wpguard_assert( in_array( 'telegram', Settings::get_enabled_notification_channels(), true ), 'telegram must be reported as enabled' );
+}
+
+function test_notify_channel_secret_field_blank_submission_keeps_current_value() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://discord.com/api/webhooks/123/abc',
+	) );
+	// A later save from a DIFFERENT tab's Save button still submits the
+	// full form, but the masked Discord field renders (and therefore
+	// submits) blank. It must NOT wipe the previously saved webhook.
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => '',
+	) );
+	wpguard_assert( true === $result['ok'], 'a save with a blank secret field must still succeed' );
+	wpguard_assert_equals( 'https://discord.com/api/webhooks/123/abc', Settings::get_all()['notify_discord_webhook_url'], 'a blank submission must never clear a previously saved webhook URL, same discipline as app_password' );
+}
+
+function test_notify_gotify_url_is_plain_not_blank_keeps_current() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_gotify_enabled' => '1', 'notify_gotify_url' => 'https://gotify.example.com',
+	) );
+	// Unlike a secret field, Gotify's server URL is a plain address (same
+	// category as nextcloud_url). A blank resubmission DOES clear it,
+	// since it's never masked and the admin can see and edit it directly.
+	Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_gotify_enabled' => '1', 'notify_gotify_url' => '',
+	) );
+	wpguard_assert_equals( '', Settings::get_all()['notify_gotify_url'], 'a plain (non-secret) field like notify_gotify_url must follow normal submit-as-is semantics, not blank-keeps-current' );
+}
+
+// Notification URL validation: Discord/Slack only ever accept their own
+// real webhook host, since nothing else is a legitimate value there;
+// ntfy/Gotify/the generic webhook follow the same https-only, no-host-
+// blocklist rule as nextcloud_url, since a self-hosted server or a
+// custom listener is routinely on a LAN address.
+
+function test_notify_discord_webhook_url_rejects_wrong_host() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://evil.example.com/steal',
+	) );
+	wpguard_assert( false === $result['ok'], 'a Discord field pointed at a non-Discord host must be rejected' );
+	wpguard_assert( isset( $result['errors']['notify_discord_webhook_url'] ), 'the error must be reported against the right field' );
+}
+
+function test_notify_discord_webhook_url_accepts_real_host() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://discord.com/api/webhooks/1/abc',
+	) );
+	wpguard_assert( true === $result['ok'], 'a real discord.com webhook URL must be accepted' );
+}
+
+function test_notify_slack_webhook_url_rejects_wrong_host() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_slack_enabled' => '1', 'notify_slack_webhook_url' => 'https://discord.com/api/webhooks/1/abc',
+	) );
+	wpguard_assert( false === $result['ok'], 'a Slack field pointed at a non-Slack host (even another legitimate service) must be rejected' );
+}
+
+function test_notify_ntfy_url_rejects_plain_http() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_ntfy_enabled' => '1', 'notify_ntfy_url' => 'http://ntfy.example.com/topic',
+	) );
+	wpguard_assert( false === $result['ok'], 'plain http must be rejected for ntfy, same as the Nextcloud URL' );
+}
+
+function test_notify_ntfy_url_accepts_any_https_host_no_blocklist() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_ntfy_enabled' => '1', 'notify_ntfy_url' => 'https://192.168.1.50/my-topic',
+	) );
+	wpguard_assert( true === $result['ok'], 'a self-hosted ntfy server on a LAN address must be accepted, same reasoning as nextcloud_url: no SSRF host blocklist' );
+}
+
+function test_notify_gotify_url_rejects_plain_http() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_gotify_enabled' => '1', 'notify_gotify_url' => 'http://gotify.example.com',
+	) );
+	wpguard_assert( false === $result['ok'], 'plain http must be rejected for Gotify too' );
+}
+
+function test_notify_webhook_url_rejects_plain_http() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_webhook_enabled' => '1', 'notify_webhook_url' => 'http://example.com/hook',
+	) );
+	wpguard_assert( false === $result['ok'], 'plain http must be rejected for the generic webhook too' );
+}
+
 // Phase 3 (multi-backend): wording/doc-link hint only (Nextcloud_Client
 // itself has no backend branching -- see its docblock) -- but still a
 // fixed-choice <select>, same clamp-not-fail tolerance as schedule.
@@ -482,6 +643,21 @@ return array(
 	'test_legacy_tiered_disabled_without_schedule_mode_migrates_to_scheduled_mode',
 	'test_incremental_defaults_to_disabled_when_missing',
 	'test_incremental_accepts_enabled',
+	'test_notify_on_failure_defaults_enabled_before_any_save',
+	'test_notify_on_success_defaults_disabled_before_any_save',
+	'test_notify_on_failure_omitted_after_a_real_save_means_disabled',
+	'test_notify_on_failure_and_success_accept_enabled',
+	'test_every_notification_channel_defaults_disabled',
+	'test_notify_channel_secret_fields_save_when_provided',
+	'test_notify_channel_secret_field_blank_submission_keeps_current_value',
+	'test_notify_gotify_url_is_plain_not_blank_keeps_current',
+	'test_notify_discord_webhook_url_rejects_wrong_host',
+	'test_notify_discord_webhook_url_accepts_real_host',
+	'test_notify_slack_webhook_url_rejects_wrong_host',
+	'test_notify_ntfy_url_rejects_plain_http',
+	'test_notify_ntfy_url_accepts_any_https_host_no_blocklist',
+	'test_notify_gotify_url_rejects_plain_http',
+	'test_notify_webhook_url_rejects_plain_http',
 	'test_backend_defaults_to_nextcloud_when_missing',
 	'test_backend_accepts_owncloud_and_opencloud',
 	'test_backend_rejects_unrecognized_value_without_failing_save',

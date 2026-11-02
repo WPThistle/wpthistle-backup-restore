@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.3.2
+Stable tag: 2.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -44,7 +44,9 @@ Free. No account, no license key, no feature paywall. The donate link in the plu
 
 = Where's my Nextcloud/ownCloud/OpenCloud password stored, can it leak? =
 
-It's stored in your WordPress database (unless you lock it via a wp-config.php constant instead, see Installation above), never echoed back to you after you save it, and deliberately excluded from a backup's own exported database content, so a backup of your site can never also contain the key to your own storage account. Always generate a dedicated app password/app token for this (see the next question) rather than using your real account password.
+It's stored in your WordPress database, never echoed back to you after you save it, and deliberately excluded from a backup's own exported database content, so a backup of your site can never also contain the key to your own storage account. Always generate a dedicated app password/app token for this (see the next question) rather than using your real account password.
+
+If you'd rather it never touch the database at all, define `WPTHISTLE_BACKUP_APP_PASSWORD` (a constant, not an option) in your site's wp-config.php instead. When that constant is defined, the Connection tab's password field locks and shows it's set via that constant; whatever you've saved in the database is ignored, and "Forget Connection" can't clear it either, since there's nothing there to clear. A similar `WPTHISTLE_BACKUP_CA_BUNDLE` constant exists for the optional private-CA path, same reasoning.
 
 = What's an "app password" / "app token," and why can't I just use my normal password? =
 
@@ -98,11 +100,13 @@ For a Nextcloud or ownCloud destination, an interrupted large file resumes from 
 
 To some degree, yes. Archiving files and uploading to your storage destination uses your own server's CPU, disk, and bandwidth while it runs, same as any backup tool would. It's processed in small time-boxed batches specifically so it doesn't hit your host's execution-time limit and die mid-job, but that's a reliability measure, not a promise of zero impact. There's no time-of-day setting to dodge your busiest hours with directly; a scheduled backup starts on whichever request happens to reach your site first on a selected day, at whatever time that turns out to be.
 
-If your site is quiet overnight, you can still get close to a chosen time by setting up the optional overnight ping described in "Guaranteed scheduling" below: point a free service like cron-job.org at your site's wp-cron.php URL, set it to run once around, say, 2:00AM, and on a backup day that becomes the latest the backup will start, since any earlier visitor would trigger it sooner. It's a nudge toward a quiet hour, not an exact scheduled time.
+If your site is quiet overnight, you can still get close to a chosen time with the optional overnight ping on the settings page's Advanced tab ("Guaranteed scheduling"): point a free service like cron-job.org at your site's wp-cron.php URL, set it to run once around, say, 2:00AM, and on a backup day that becomes the latest the backup will start, since any earlier visitor would trigger it sooner. It's a nudge toward a quiet hour, not an exact scheduled time.
 
 = What if I forget to check on it, will I know if backups silently stop working? =
 
-Honestly, not yet. There's no email or other alert today if a backup fails or stalls; the plain-English status on the settings page is something you check, not something that reaches out to you. As of 2.1.0, a backup that successfully starts is very unlikely to just quietly die (it advances itself to completion rather than depending on visitor traffic), but nothing currently taps you on the shoulder if it never started in the first place or genuinely fails. Worth checking in on the status page occasionally rather than assuming silence means success.
+Yes, if you turn it on. The Notifications tab has a "Notify on failure" toggle plus a choice of where to send it: email, Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, or a generic webhook for your own automation. Nothing is enabled by default, including email; pick whichever you actually check. Whatever you turn on is told the site name, the backup ID, when it finished, (on failure) the error text, and a link back to your settings page; the custom webhook additionally gets this plugin's version number. Nothing else about this site. A success notification is a separate opt-in on the same tab, off by default, since most people don't want an "it worked" message every time.
+
+One honest limit: a notification only fires once a backup has actually started and reaches a real end state, success or failure. A scheduled backup that never starts at all (a genuinely quiet site with zero traffic on its selected day, credentials cleared, or another backup already in progress at that moment) sends nothing, since there's nothing that failed, just nothing that ran yet. As of 2.1.0, a backup that does start is very unlikely to quietly die partway through (it advances itself to completion rather than depending on visitor traffic), so this mostly matters for a site that goes a long stretch with no traffic at all on its scheduled day. Worth an occasional glance at the status page either way, rather than assuming silence always means success.
 
 = If I uninstall the plugin, do my existing backups get deleted too? =
 
@@ -183,6 +187,15 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.4.0 =
+New Notifications tab (between Backup Schedule and Advanced): get alerted the moment a scheduled backup fails or succeeds, without having to go check. Email is listed first, followed by eight third-party services -- Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, and a generic JSON webhook for anything else. A "Send Test Notification" button fires a one-off test message to every channel you've turned on, so you can confirm it's wired up correctly before relying on it.
+
+Every channel is off by default. Turn one on and failure alerts are on by default, success alerts are off by default -- flip either independently. Only scheduled (automatic) backups ever trigger an alert; a manual "Back Up Now" never does, since you're already watching it run.
+
+Credentials for each service follow the same "leave blank to keep what's saved" rule as the existing Nextcloud app password field, and are never echoed back into the page. Reviewed by a security audit before release; findings addressed: outbound notification requests never follow redirects, and bot tokens embedded in a request URL are now redacted from logs in both their raw and URL-encoded form.
+
+Cosmetic: the WPThistle family hub page now shows the wordmark in its header, and the Backup and Restore settings page shows its icon next to the page title. The plugin's icon on the Plugins page and the Updates page (previously a generic placeholder) now shows the real WPThistle mark.
 
 = 2.3.2 =
 Cosmetic/docs only, no behavior changes. The FAQ above now also shows up right in WordPress: click "View details" on this plugin's row on the Plugins screen, and there's a new FAQ tab alongside Description and Changelog, same content as here. Also refreshed the wordmark banner on the plugin's GitHub page to match the circular icon mark.

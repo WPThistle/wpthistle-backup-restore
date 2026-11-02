@@ -1,5 +1,108 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## Unreleased (not yet tagged) — multi-channel Notifications, 2026-11-02
+
+Replaces the email-only alert work from earlier the same day (never
+shipped, so the rename below cost nothing). New `Notifications` class,
+new settings tab, 8 channels. **Vex security audit (T27 in
+docs/threat-model.md): no BLOCKED or CRITICAL findings.** 4 LOW, 2
+fixed same-day (a redirect-header-leak hardening gap, an incomplete
+log-redaction form), 2 accepted and documented (no credential-clear
+button per channel, no rate limit on the test-notification endpoint);
+2 INFO (1 fixed: disclosure copy undersold what actually gets sent;
+1 documented: an unreachable code path).
+
+- **8 notification channels**, plus the existing email path, all behind
+  a new Notifications settings tab (between Backup Schedule and
+  Advanced): Discord, Slack, Pushover, Pushbullet, ntfy, Gotify,
+  Telegram, and a generic webhook for custom automation. Every channel,
+  email included, defaults OFF (the owner caught this: the original
+  email-only design had email on by default, which stopped being the
+  right call the moment there are 9 channels to choose from). The
+  "when" (notify on failure / also notify on success) is global, shared
+  by whichever channels are turned on; the "where" is per-channel.
+- Settings renamed before anything shipped: `alert_on_failure` ->
+  `notify_on_failure`, `alert_on_success` -> `notify_on_success`, plus
+  21 new keys (one `_enabled` flag and 1-2 credential fields per
+  channel). Every credential field follows `app_password`'s own
+  discipline: masked (password-type input), never echoed back, blank
+  submission means "leave unchanged" (`Settings::save_secret_field()`),
+  since every Save button submits the whole form and would otherwise
+  wipe every OTHER tab's credentials the moment any one tab is saved.
+  Discord/Slack validate against their real webhook hosts
+  (discord.com/discordapp.com, hooks.slack.com); ntfy/Gotify/the
+  generic webhook are https-only with no private-IP blocklist, same
+  reasoning as `nextcloud_url` (a self-hosted server is routinely on a
+  LAN address).
+- **"Send Test Notification"** button on the new tab: dispatches a
+  clearly-labeled test message (never worded like a real backup
+  outcome) to every enabled channel using currently-saved settings,
+  reports OK or a short failure reason per channel. The only practical
+  way to check 8 configs without waiting for a real scheduled backup to
+  fail, and the owner's own route to verifying this against his real
+  accounts.
+- **Per-channel formatting**, each covered by a unit test
+  (`tests/unit/NotificationsTest.php`, 21 tests): Discord truncates to
+  2000 chars and sends `allowed_mentions: {parse: []}` so an
+  `@everyone` in an error message can never actually ping anyone; Slack
+  escapes `&`/`<`/`>`; Pushover truncates to its documented 250/1024
+  title/message limits; Telegram sends no `parse_mode`, so an
+  underscore or asterisk in a backup ID/error message can't trip
+  Markdown parsing into a 400; ntfy publishes via JSON (not the
+  topic-path/header convention), since a non-ASCII site name in a
+  `Title:` header breaks that form; the generic webhook gets structured
+  JSON (`schema_version`, `event`, `site`, `backup_id`, `status`,
+  `finished_at`, `error`, `plugin_version`) instead of prose.
+- **Nothing sensitive is ever logged.** A channel's send failure is
+  reduced to a channel name plus an HTTP status code or the word
+  "network error", never the underlying error, which can embed the
+  secret itself (Telegram's bot token sits in the request URL's own
+  path). `Job_Orchestrator`'s logger additionally redacts every
+  channel's credential value as defense in depth, same as it already
+  does for the Nextcloud app password. Vex finding LOW-N-02: Telegram's
+  bot token and Gotify's app token are both `rawurlencode()`'d into
+  their request URL (`:`/`/` become `%3A`/`%2F`), a form the plain
+  redaction list didn't match; fixed by listing both the raw and
+  encoded form, covered by a new unit test.
+- **Timing**: dispatch moved to the very end of `step_finalize()`,
+  after chain-state recording and retention pruning, with a 5s timeout
+  per channel (up to 8 channels dispatched sequentially; a generous
+  timeout multiplied by 8 risks hitting PHP's own
+  `max_execution_time`), and `redirection => 0` so a 3xx response can't
+  carry an Authorization/Access-Token header, or a token embedded in
+  the URL itself, to a different host. Vex finding LOW-N-01: the
+  `array_merge()` establishing those two values put them first, so a
+  future channel builder's own `$args` could silently override them;
+  fixed by reversing the merge order so the security values always win.
+- Verified live against the real stack
+  (`tests/e2e/run-e2e-notifications.sh`, 9 cases): real scheduled
+  failure sends exactly one alert with the right recipient/subject; the
+  identical failure via a manual backup sends nothing (origin gate);
+  both "when" toggles independently suppress/allow; `claim_alert()`'s
+  atomic guard rejects a second claim; a real scheduled success
+  dispatches a genuine HTTP POST to Discord with the right URL/headers/
+  content (via a `pre_http_request` mock, since there's no real webhook
+  to send to in this disposable stack); "Send Test Notification"
+  dispatches to every enabled channel through the real AJAX endpoint.
+  Discord stands in as the one channel proven fully live end-to-end;
+  the other 7 channels' exact request shapes are already exhaustively
+  unit-tested and share the identical `send_request()` dispatch code
+  path Discord's own live proof already exercises.
+- Full regression battery re-run twice (18 suites, once mid-edit, once
+  after the Vex fixes landed with nothing being edited): 16 pass clean
+  each time, 2 apparent failures each time (`run-e2e-download-backup.sh`
+  and `run-e2e-notifications.sh`), always the exact same "could not
+  extract nonce from settings page" symptom, always only when run
+  immediately after another suite in the same batch, never when either
+  is run standalone, where both pass every time (confirmed 4 times
+  total across the two runs). Same known sequencing artifact on the
+  shared wp-restore fixture already documented in the 2.3.0 entry
+  below, not a product bug; the first run's `run-e2e-notifications.sh`
+  failure had a one-off second cause (the background battery read the
+  script file while its own dash cleanup was still being edited,
+  a bash syntax error now impossible since nothing edits it anymore).
+- 232/232 unit tests, lint clean.
+
 ## 2.3.2 — FAQ in the "View details" popup, refreshed wordmark, 2026-11-02
 
 Cosmetic/docs only, no behavior changes, no security-relevant surface
