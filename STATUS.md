@@ -1,6 +1,57 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
-## Unreleased (not yet tagged) — multi-channel Notifications, 2026-11-02
+## Unreleased (not yet tagged) — Notifications hardening: credential clear + test-endpoint rate limit, 2026-11-02
+
+Closes the two LOW findings accepted (not fixed) in the 2.4.0 entry
+below. Owner's call: iterate on these now rather than leave them open,
+no new Vex audit scope beyond re-checking these two specific changes.
+
+- **LOW-N-03 fixed**: each of the 10 notification secret fields
+  (webhook URLs/tokens/keys across the 8 third-party channels) now has
+  a "Clear saved value" checkbox next to it, rendered only when
+  something is actually saved. `Settings::save_secret_field()` honors
+  a companion `{$key}_clear` POST flag; a genuinely retyped non-blank
+  value still wins over a stale clear flag in the same submission.
+  Deliberately NOT extended to `app_password` -- that one already has
+  `forget_connection()` for this.
+- **LOW-N-04 fixed**: `ajax_notify_test` now has a 10-second site-wide
+  cooldown -- site-wide rather than per-user, since the point is
+  capping how often this site hits outside services at all, not which
+  admin is clicking.
+- **Vex re-audit of the above two fixes caught two more, both fixed
+  same day**: LOW-N-04-RESIDUAL (the cooldown's original
+  get_transient/set_transient pair had a check-then-act gap --
+  concurrent requests could both slip through before either wrote it;
+  now an atomic `add_option()` claim, same idiom
+  `Job_Store::claim_today()`/`claim_month()`/`claim_alert()` already
+  use); INFO-N-03 (the 10 new `_clear` flags were read with `! empty()`,
+  which would treat a future JS refactor's literal string `"false"` as
+  truthy and silently clear every credential -- now a strict `'1' ===`
+  check).
+- 2 new unit tests (clear flag blanks the value; a retyped value wins
+  over a stale clear flag), 234/234 total, lint clean.
+- 2 new E2E cases in `run-e2e-notifications.sh` (now 11 total, A-K):
+  Case J proves the cooldown rejects an immediate repeat click and
+  then works again once 10s passes; Case K proves the clear flag
+  through the real Save Settings AJAX endpoint, not just the pure
+  function. Both re-run clean against the atomic-claim/strict-flag
+  versions too.
+- Found live while re-running the full battery: `run-e2e-multi-backend.sh`'s
+  cleanup left the `wp-restore` container's `WORDPRESS_TABLE_PREFIX`
+  environment variable stuck at `wpmb_` (its temporary value for that
+  suite's own prefix-isolation test) even though `.env` on disk was
+  already back to `wp_` -- the container's live process env doesn't
+  re-read `.env` without being recreated. Fixed live via
+  `docker compose up -d --force-recreate wp-restore`; the script's own
+  cleanup step still needs a fix to recreate the container (not just
+  edit `.env`) so this can't recur. Logged as a known test-infra gap,
+  not fixed tonight -- out of scope for this round.
+- Vex re-audited just these two changes before shipping (see T27 in
+  docs/threat-model.md): LOW-N-03/LOW-N-04 updated to fixed,
+  LOW-N-04-RESIDUAL and INFO-N-03 added and fixed same day. No
+  BLOCKED or CRITICAL findings at any point.
+
+## 2.4.0 — multi-channel Notifications, 2026-11-02
 
 Replaces the email-only alert work from earlier the same day (never
 shipped, so the rename below cost nothing). New `Notifications` class,

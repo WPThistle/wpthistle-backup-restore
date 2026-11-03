@@ -388,10 +388,26 @@ class Settings {
 	 * admin actually retyped it. Without this, saving from ANY tab
 	 * (every Save button submits the whole form) would silently wipe
 	 * every credential on every OTHER tab's fields it doesn't show.
+	 *
+	 * Vex security audit finding LOW-N-03: "leave blank to keep" alone
+	 * gave an admin no way to actually remove a saved credential short of
+	 * a raw DB edit (typing a new value overwrites it, but an empty
+	 * submission is defined to mean "unchanged," not "clear"). A
+	 * companion `{$key}_clear` flag closes that -- checked explicitly in
+	 * the admin UI, separate from the field itself, so it can never be
+	 * set by accident the way an empty field already can be. A genuinely
+	 * retyped value always wins over a stale clear flag, in case both
+	 * ever arrive in the same submission.
 	 */
 	private static function save_secret_field( array $input, array $current, string $key ): string {
 		$submitted = isset( $input[ $key ] ) ? (string) $input[ $key ] : '';
-		return ( '' === $submitted ) ? (string) ( $current[ $key ] ?? '' ) : $submitted;
+		if ( '' !== $submitted ) {
+			return $submitted;
+		}
+		if ( ! empty( $input[ $key . '_clear' ] ) ) {
+			return '';
+		}
+		return (string) ( $current[ $key ] ?? '' );
 	}
 
 	/**

@@ -14,6 +14,17 @@ class Admin {
 
 	const NONCE_ACTION = 'wpthistle_backup_admin';
 
+	// Vex security audit finding LOW-N-04: nothing previously stopped a
+	// script-automated, rapidly repeated "Send Test Notification" click
+	// (a valid nonce + manage_options still being the only gate) from
+	// hammering whichever third-party services are configured. A short
+	// site-wide cooldown -- not per-user, since the point is capping
+	// how often THIS SITE hits those outside services at all, regardless
+	// of which admin is clicking -- closes that without meaningfully
+	// slowing down a legitimate admin actually testing their setup.
+	const NOTIFY_TEST_THROTTLE_KEY     = 'wpthistle_backup_notify_test_throttle';
+	const NOTIFY_TEST_THROTTLE_SECONDS = 10;
+
 	/**
 	 * Phase 3, security audit finding LOW-DL-4: the download link previously reused
 	 * NONCE_ACTION, the same nonce shared by every other action on this
@@ -112,6 +123,35 @@ class Admin {
 	 */
 	private function secret_field_placeholder( string $current_value, string $empty_placeholder ): string {
 		return '' !== $current_value ? __( 'Saved (leave blank to keep)', 'wpthistle-backup-restore' ) : $empty_placeholder;
+	}
+
+	/**
+	 * Vex security audit finding LOW-N-03: pairs with Settings::save_secret_field()'s
+	 * new `{$key}_clear` flag. Only rendered when there is actually
+	 * something saved to clear -- nothing to offer otherwise, and it
+	 * keeps a field with nothing saved from growing a checkbox that
+	 * would do nothing.
+	 */
+	private function clear_secret_checkbox( string $field_id, string $current_value ): string {
+		if ( '' === $current_value ) {
+			return '';
+		}
+		return '<label style="margin-left:8px;font-weight:normal;"><input type="checkbox" id="wpthistle_backup_' . esc_attr( $field_id ) . '_clear"> '
+			. esc_html__( 'Clear saved value', 'wpthistle-backup-restore' ) . '</label>';
+	}
+
+	/**
+	 * Vex security audit finding INFO-N-03: `! empty( $_POST[...] )`
+	 * treats ANY non-empty string as truthy, including the literal
+	 * string "false" -- harmless today since the JS only ever sends
+	 * '1' or '', but a future refactor sending a raw JS boolean through
+	 * URLSearchParams/$.param() would serialize `false` as "false" and
+	 * silently clear every credential on every save. A strict '1'
+	 * comparison makes the wire contract explicit instead of relying on
+	 * today's JS never changing.
+	 */
+	private function clear_flag( string $key ): bool {
+		return isset( $_POST[ $key ] ) && '1' === (string) $_POST[ $key ];
 	}
 
 	public function add_menu(): void {
@@ -388,24 +428,34 @@ class Admin {
 			// characters that would mangle under it.
 			'notify_discord_enabled' => isset( $_POST['notify_discord_enabled'] ) ? ! empty( $_POST['notify_discord_enabled'] ) : false,
 			'notify_discord_webhook_url' => isset( $_POST['notify_discord_webhook_url'] ) ? wp_unslash( $_POST['notify_discord_webhook_url'] ) : '',
+			'notify_discord_webhook_url_clear' => $this->clear_flag( 'notify_discord_webhook_url_clear' ),
 			'notify_slack_enabled' => isset( $_POST['notify_slack_enabled'] ) ? ! empty( $_POST['notify_slack_enabled'] ) : false,
 			'notify_slack_webhook_url' => isset( $_POST['notify_slack_webhook_url'] ) ? wp_unslash( $_POST['notify_slack_webhook_url'] ) : '',
+			'notify_slack_webhook_url_clear' => $this->clear_flag( 'notify_slack_webhook_url_clear' ),
 			'notify_pushover_enabled' => isset( $_POST['notify_pushover_enabled'] ) ? ! empty( $_POST['notify_pushover_enabled'] ) : false,
 			'notify_pushover_user_key' => isset( $_POST['notify_pushover_user_key'] ) ? wp_unslash( $_POST['notify_pushover_user_key'] ) : '',
+			'notify_pushover_user_key_clear' => $this->clear_flag( 'notify_pushover_user_key_clear' ),
 			'notify_pushover_api_token' => isset( $_POST['notify_pushover_api_token'] ) ? wp_unslash( $_POST['notify_pushover_api_token'] ) : '',
+			'notify_pushover_api_token_clear' => $this->clear_flag( 'notify_pushover_api_token_clear' ),
 			'notify_pushbullet_enabled' => isset( $_POST['notify_pushbullet_enabled'] ) ? ! empty( $_POST['notify_pushbullet_enabled'] ) : false,
 			'notify_pushbullet_access_token' => isset( $_POST['notify_pushbullet_access_token'] ) ? wp_unslash( $_POST['notify_pushbullet_access_token'] ) : '',
+			'notify_pushbullet_access_token_clear' => $this->clear_flag( 'notify_pushbullet_access_token_clear' ),
 			'notify_ntfy_enabled' => isset( $_POST['notify_ntfy_enabled'] ) ? ! empty( $_POST['notify_ntfy_enabled'] ) : false,
 			'notify_ntfy_url' => isset( $_POST['notify_ntfy_url'] ) ? wp_unslash( $_POST['notify_ntfy_url'] ) : '',
+			'notify_ntfy_url_clear' => $this->clear_flag( 'notify_ntfy_url_clear' ),
 			'notify_ntfy_token' => isset( $_POST['notify_ntfy_token'] ) ? wp_unslash( $_POST['notify_ntfy_token'] ) : '',
+			'notify_ntfy_token_clear' => $this->clear_flag( 'notify_ntfy_token_clear' ),
 			'notify_gotify_enabled' => isset( $_POST['notify_gotify_enabled'] ) ? ! empty( $_POST['notify_gotify_enabled'] ) : false,
 			'notify_gotify_url' => isset( $_POST['notify_gotify_url'] ) ? wp_unslash( $_POST['notify_gotify_url'] ) : '',
 			'notify_gotify_token' => isset( $_POST['notify_gotify_token'] ) ? wp_unslash( $_POST['notify_gotify_token'] ) : '',
+			'notify_gotify_token_clear' => $this->clear_flag( 'notify_gotify_token_clear' ),
 			'notify_telegram_enabled' => isset( $_POST['notify_telegram_enabled'] ) ? ! empty( $_POST['notify_telegram_enabled'] ) : false,
 			'notify_telegram_bot_token' => isset( $_POST['notify_telegram_bot_token'] ) ? wp_unslash( $_POST['notify_telegram_bot_token'] ) : '',
+			'notify_telegram_bot_token_clear' => $this->clear_flag( 'notify_telegram_bot_token_clear' ),
 			'notify_telegram_chat_id' => isset( $_POST['notify_telegram_chat_id'] ) ? wp_unslash( $_POST['notify_telegram_chat_id'] ) : '',
 			'notify_webhook_enabled' => isset( $_POST['notify_webhook_enabled'] ) ? ! empty( $_POST['notify_webhook_enabled'] ) : false,
 			'notify_webhook_url' => isset( $_POST['notify_webhook_url'] ) ? wp_unslash( $_POST['notify_webhook_url'] ) : '',
+			'notify_webhook_url_clear' => $this->clear_flag( 'notify_webhook_url_clear' ),
 		);
 		$result = Settings::save( $input );
 		if ( $result['ok'] ) {
@@ -446,6 +496,33 @@ class Admin {
 	}
 
 	/**
+	 * Vex security audit finding LOW-N-04-RESIDUAL: a plain
+	 * get_transient()-then-set_transient() pair has a check-then-act gap
+	 * -- two concurrent requests can both read "not set" before either
+	 * one writes it. add_option() is a real MySQL INSERT, unique on
+	 * option_name, so two concurrent callers can never both win it; one
+	 * gets true, the other false. Same atomic-claim idiom
+	 * Job_Store::claim_today()/claim_month()/claim_alert() already use
+	 * for the exact same reason, just against wp_options instead of the
+	 * jobs table. The stale-reclaim branch below (once the window has
+	 * genuinely elapsed) keeps a narrow re-claim race of its own, but
+	 * only once per 10s window -- same bound the original transient
+	 * already had, a single burst rather than ongoing abuse.
+	 */
+	private static function claim_notify_test_throttle(): bool {
+		$now = time();
+		if ( add_option( self::NOTIFY_TEST_THROTTLE_KEY, $now, '', 'no' ) ) {
+			return true;
+		}
+		$existing = (int) get_option( self::NOTIFY_TEST_THROTTLE_KEY, 0 );
+		if ( $now - $existing < self::NOTIFY_TEST_THROTTLE_SECONDS ) {
+			return false;
+		}
+		update_option( self::NOTIFY_TEST_THROTTLE_KEY, $now, 'no' );
+		return true;
+	}
+
+	/**
 	 * "Send Test Notification": the settings page's only way to verify
 	 * all 8 third-party channels without waiting for a real scheduled
 	 * backup to fail. Uses CURRENTLY SAVED settings (not whatever is
@@ -454,6 +531,10 @@ class Admin {
 	 */
 	public function ajax_notify_test(): void {
 		if ( ! $this->require_capability_and_nonce() ) {
+			return;
+		}
+		if ( ! self::claim_notify_test_throttle() ) {
+			wp_send_json_error( array( 'message' => __( 'Please wait a few seconds before sending another test.', 'wpthistle-backup-restore' ) ), 429 );
 			return;
 		}
 		$results = Notifications::dispatch_test();
@@ -1125,6 +1206,7 @@ class Admin {
 						<label><input type="checkbox" id="wpthistle_backup_notify_discord_enabled" <?php checked( $settings['notify_discord_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_discord_webhook_url"><?php esc_html_e( 'Webhook URL', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_discord_webhook_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_discord_webhook_url'], __( 'https://discord.com/api/webhooks/...', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_discord_webhook_url', $settings['notify_discord_webhook_url'] ); ?>
 						<p class="description"><?php esc_html_e( 'Create an incoming webhook under your Discord channel\'s Integrations settings, then paste its URL here.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1134,6 +1216,7 @@ class Admin {
 						<label><input type="checkbox" id="wpthistle_backup_notify_slack_enabled" <?php checked( $settings['notify_slack_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_slack_webhook_url"><?php esc_html_e( 'Webhook URL', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_slack_webhook_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_slack_webhook_url'], __( 'https://hooks.slack.com/services/...', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_slack_webhook_url', $settings['notify_slack_webhook_url'] ); ?>
 						<p class="description"><?php esc_html_e( 'Create an incoming webhook app in your Slack workspace, then paste its webhook URL here.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1142,9 +1225,11 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_pushover_enabled" <?php checked( $settings['notify_pushover_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_pushover_user_key"><?php esc_html_e( 'User Key', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_pushover_user_key" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_user_key'], __( 'from your Pushover dashboard', 'wpthistle-backup-restore' ) ) ); ?>"><br>
+						<input type="password" id="wpthistle_backup_notify_pushover_user_key" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_user_key'], __( 'from your Pushover dashboard', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_pushover_user_key', $settings['notify_pushover_user_key'] ); ?><br>
 						<label for="wpthistle_backup_notify_pushover_api_token"><?php esc_html_e( 'API Token', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_pushover_api_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_api_token'], __( 'from your own registered application', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_pushover_api_token', $settings['notify_pushover_api_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'Register your own free application at pushover.net/apps/build to get an API Token; your User Key is on your Pushover dashboard.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1154,6 +1239,7 @@ class Admin {
 						<label><input type="checkbox" id="wpthistle_backup_notify_pushbullet_enabled" <?php checked( $settings['notify_pushbullet_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_pushbullet_access_token"><?php esc_html_e( 'Access Token', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_pushbullet_access_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushbullet_access_token'], __( 'from Account Settings', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_pushbullet_access_token', $settings['notify_pushbullet_access_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'Generate an Access Token under your Pushbullet account\'s Settings.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1162,9 +1248,11 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_ntfy_enabled" <?php checked( $settings['notify_ntfy_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_ntfy_url"><?php esc_html_e( 'Topic URL', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_ntfy_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_url'], __( 'https://ntfy.sh/your-topic-name', 'wpthistle-backup-restore' ) ) ); ?>"><br>
+						<input type="password" id="wpthistle_backup_notify_ntfy_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_url'], __( 'https://ntfy.sh/your-topic-name', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_ntfy_url', $settings['notify_ntfy_url'] ); ?><br>
 						<label for="wpthistle_backup_notify_ntfy_token"><?php esc_html_e( 'Access Token (optional)', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_ntfy_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_token'], __( 'only for a private/self-hosted topic', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_ntfy_token', $settings['notify_ntfy_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'The full URL you would use to subscribe to a topic, on ntfy.sh or your own self-hosted server. If using the public ntfy.sh service, pick an unguessable topic name; anyone who knows it can read or publish to it.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1176,6 +1264,7 @@ class Admin {
 						<input type="text" id="wpthistle_backup_notify_gotify_url" value="<?php echo esc_attr( $settings['notify_gotify_url'] ); ?>" class="regular-text" placeholder="https://gotify.example.com"><br>
 						<label for="wpthistle_backup_notify_gotify_token"><?php esc_html_e( 'App Token', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_gotify_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_gotify_token'], __( 'created under Gotify\'s Apps section', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_gotify_token', $settings['notify_gotify_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'Your self-hosted Gotify server\'s base URL, and an application token created under its Apps section.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1184,7 +1273,8 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_telegram_enabled" <?php checked( $settings['notify_telegram_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_telegram_bot_token"><?php esc_html_e( 'Bot Token', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_telegram_bot_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_telegram_bot_token'], __( 'from @BotFather', 'wpthistle-backup-restore' ) ) ); ?>"><br>
+						<input type="password" id="wpthistle_backup_notify_telegram_bot_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_telegram_bot_token'], __( 'from @BotFather', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_telegram_bot_token', $settings['notify_telegram_bot_token'] ); ?><br>
 						<label for="wpthistle_backup_notify_telegram_chat_id"><?php esc_html_e( 'Chat ID', 'wpthistle-backup-restore' ); ?></label>
 						<input type="text" id="wpthistle_backup_notify_telegram_chat_id" value="<?php echo esc_attr( $settings['notify_telegram_chat_id'] ); ?>" class="regular-text" placeholder="123456789">
 						<p class="description"><?php esc_html_e( 'Message @BotFather on Telegram to create a bot and get its token. For the Chat ID: message your new bot once, then visit https://api.telegram.org/bot<token>/getUpdates in a browser to find your numeric chat id in the response.', 'wpthistle-backup-restore' ); ?></p>
@@ -1196,6 +1286,7 @@ class Admin {
 						<label><input type="checkbox" id="wpthistle_backup_notify_webhook_enabled" <?php checked( $settings['notify_webhook_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_webhook_url"><?php esc_html_e( 'Webhook URL', 'wpthistle-backup-restore' ); ?></label>
 						<input type="password" id="wpthistle_backup_notify_webhook_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_webhook_url'], __( 'https://...', 'wpthistle-backup-restore' ) ) ); ?>">
+						<?php echo $this->clear_secret_checkbox( 'notify_webhook_url', $settings['notify_webhook_url'] ); ?>
 						<p class="description"><?php esc_html_e( 'Posts a structured JSON payload (event, site, backup ID, status, error) to this URL instead of a formatted message. Useful for automation tools like n8n, Home Assistant, or a custom listener. Covers anything not named above.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
@@ -1282,6 +1373,39 @@ class Admin {
 				el.addEventListener('input', function(){ settingsDirty = true; });
 				el.addEventListener('change', function(){ settingsDirty = true; });
 			});
+
+			// Vex security audit finding LOW-N-03: each "Clear saved value"
+			// checkbox is only rendered when that field actually has
+			// something saved, so it may not exist in the DOM at all --
+			// unlike settingsFieldIds above, every lookup here is guarded.
+			// Deliberately NOT part of settingsFieldIds/lastSavedValues:
+			// there is nothing to "revert" a clear-intent checkbox back
+			// to, it just gets unchecked again on cancel or after a
+			// successful save.
+			var clearCheckboxIds = [
+				'wpthistle_backup_notify_discord_webhook_url_clear',
+				'wpthistle_backup_notify_slack_webhook_url_clear',
+				'wpthistle_backup_notify_pushover_user_key_clear', 'wpthistle_backup_notify_pushover_api_token_clear',
+				'wpthistle_backup_notify_pushbullet_access_token_clear',
+				'wpthistle_backup_notify_ntfy_url_clear', 'wpthistle_backup_notify_ntfy_token_clear',
+				'wpthistle_backup_notify_gotify_token_clear',
+				'wpthistle_backup_notify_telegram_bot_token_clear',
+				'wpthistle_backup_notify_webhook_url_clear'
+			];
+			function clearCheckboxValue(id) {
+				var el = document.getElementById(id);
+				return (el && el.checked) ? '1' : '';
+			}
+			function resetClearCheckboxes() {
+				clearCheckboxIds.forEach(function(id){
+					var el = document.getElementById(id);
+					if (el) { el.checked = false; }
+				});
+			}
+			clearCheckboxIds.forEach(function(id){
+				var el = document.getElementById(id);
+				if (el) { el.addEventListener('change', function(){ settingsDirty = true; }); }
+			});
 			Array.prototype.forEach.call(document.querySelectorAll('.wpthistle_backup_schedule_day'), function(el){
 				el.addEventListener('change', function(){ settingsDirty = true; });
 			});
@@ -1315,6 +1439,7 @@ class Admin {
 				Array.prototype.forEach.call(document.querySelectorAll('.wpthistle_backup_schedule_day'), function(el){
 					el.checked = lastSavedValues['day_' + el.value];
 				});
+				resetClearCheckboxes();
 				updateScheduleVisibility();
 			}
 			captureSavedValues();
@@ -1392,29 +1517,40 @@ class Admin {
 					notify_email_enabled: document.getElementById('wpthistle_backup_notify_email_enabled').checked ? '1' : '',
 					notify_discord_enabled: document.getElementById('wpthistle_backup_notify_discord_enabled').checked ? '1' : '',
 					notify_discord_webhook_url: document.getElementById('wpthistle_backup_notify_discord_webhook_url').value,
+					notify_discord_webhook_url_clear: clearCheckboxValue('wpthistle_backup_notify_discord_webhook_url_clear'),
 					notify_slack_enabled: document.getElementById('wpthistle_backup_notify_slack_enabled').checked ? '1' : '',
 					notify_slack_webhook_url: document.getElementById('wpthistle_backup_notify_slack_webhook_url').value,
+					notify_slack_webhook_url_clear: clearCheckboxValue('wpthistle_backup_notify_slack_webhook_url_clear'),
 					notify_pushover_enabled: document.getElementById('wpthistle_backup_notify_pushover_enabled').checked ? '1' : '',
 					notify_pushover_user_key: document.getElementById('wpthistle_backup_notify_pushover_user_key').value,
+					notify_pushover_user_key_clear: clearCheckboxValue('wpthistle_backup_notify_pushover_user_key_clear'),
 					notify_pushover_api_token: document.getElementById('wpthistle_backup_notify_pushover_api_token').value,
+					notify_pushover_api_token_clear: clearCheckboxValue('wpthistle_backup_notify_pushover_api_token_clear'),
 					notify_pushbullet_enabled: document.getElementById('wpthistle_backup_notify_pushbullet_enabled').checked ? '1' : '',
 					notify_pushbullet_access_token: document.getElementById('wpthistle_backup_notify_pushbullet_access_token').value,
+					notify_pushbullet_access_token_clear: clearCheckboxValue('wpthistle_backup_notify_pushbullet_access_token_clear'),
 					notify_ntfy_enabled: document.getElementById('wpthistle_backup_notify_ntfy_enabled').checked ? '1' : '',
 					notify_ntfy_url: document.getElementById('wpthistle_backup_notify_ntfy_url').value,
+					notify_ntfy_url_clear: clearCheckboxValue('wpthistle_backup_notify_ntfy_url_clear'),
 					notify_ntfy_token: document.getElementById('wpthistle_backup_notify_ntfy_token').value,
+					notify_ntfy_token_clear: clearCheckboxValue('wpthistle_backup_notify_ntfy_token_clear'),
 					notify_gotify_enabled: document.getElementById('wpthistle_backup_notify_gotify_enabled').checked ? '1' : '',
 					notify_gotify_url: document.getElementById('wpthistle_backup_notify_gotify_url').value,
 					notify_gotify_token: document.getElementById('wpthistle_backup_notify_gotify_token').value,
+					notify_gotify_token_clear: clearCheckboxValue('wpthistle_backup_notify_gotify_token_clear'),
 					notify_telegram_enabled: document.getElementById('wpthistle_backup_notify_telegram_enabled').checked ? '1' : '',
 					notify_telegram_bot_token: document.getElementById('wpthistle_backup_notify_telegram_bot_token').value,
+					notify_telegram_bot_token_clear: clearCheckboxValue('wpthistle_backup_notify_telegram_bot_token_clear'),
 					notify_telegram_chat_id: document.getElementById('wpthistle_backup_notify_telegram_chat_id').value,
 					notify_webhook_enabled: document.getElementById('wpthistle_backup_notify_webhook_enabled').checked ? '1' : '',
-					notify_webhook_url: document.getElementById('wpthistle_backup_notify_webhook_url').value
+					notify_webhook_url: document.getElementById('wpthistle_backup_notify_webhook_url').value,
+					notify_webhook_url_clear: clearCheckboxValue('wpthistle_backup_notify_webhook_url_clear')
 				}).then(function(res){
 					document.getElementById(resultElId).textContent = res.data.message;
 					if (res.success) {
 						settingsDirty = false;
 						captureSavedValues();
+						resetClearCheckboxes();
 					}
 				});
 			}

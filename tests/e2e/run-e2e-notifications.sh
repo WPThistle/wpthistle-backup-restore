@@ -335,4 +335,40 @@ echo "$TEST_MAIL_BODY" | grep -q 'Test notification' || { echo "FAIL: the test e
 echo "OK  Send Test Notification dispatched to both enabled channels, clearly labeled as a test, not a real backup outcome"
 
 echo
+echo "=== Case J (Vex LOW-N-04): an immediate repeat 'Send Test Notification' click must be rejected by the cooldown ==="
+THROTTLE_RESULT=$(curl -s -c "$COOKIES" -b "$COOKIES" -d "action=wpthistle_backup_notify_test&nonce=$NONCE3" "$BASE_URL/wp-admin/admin-ajax.php")
+echo "$THROTTLE_RESULT" | grep -q '"success":false' || { echo "FAIL: an immediate repeat test-notification call must be rejected. Response: $THROTTLE_RESULT"; exit 1; }
+echo "$THROTTLE_RESULT" | grep -qi 'wait' || { echo "FAIL: the rejection must explain why (wait a few seconds). Response: $THROTTLE_RESULT"; exit 1; }
+echo "OK  an immediate repeat test-notification call is rejected by the cooldown"
+
+echo
+echo "=== Case J (continued): once the 10s cooldown passes, Send Test Notification works again ==="
+sleep 11
+reset_captured
+AFTER_COOLDOWN=$(curl -s -c "$COOKIES" -b "$COOKIES" -d "action=wpthistle_backup_notify_test&nonce=$NONCE3" "$BASE_URL/wp-admin/admin-ajax.php")
+echo "$AFTER_COOLDOWN" | grep -q '"success":true' || { echo "FAIL: test-notification must work again once the cooldown has passed. Response: $AFTER_COOLDOWN"; exit 1; }
+echo "OK  test-notification works again once the cooldown has passed"
+
+echo
+echo "=== Case K (Vex LOW-N-03): the 'Clear saved value' flag actually blanks a saved credential via the real Save Settings endpoint ==="
+PAGE4=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
+NONCE4=$(echo "$PAGE4" | sed -n 's/.*var nonce = "\([a-f0-9]*\)".*/\1/p')
+[ -n "$NONCE4" ] || { echo "FAIL: could not extract nonce for the clear-flag save"; exit 1; }
+SAVE_WITH_SECRET=$(curl -s -c "$COOKIES" -b "$COOKIES" --data-urlencode "action=wpthistle_backup_save_settings" --data-urlencode "nonce=$NONCE4" \
+  --data-urlencode "nextcloud_url=https://nc-proxy.wpguard-test.local" --data-urlencode "nextcloud_user=$NC_BACKUP_USER" --data-urlencode "app_password=$APP_PASSWORD" --data-urlencode "remote_folder=wpguard-backups" \
+  --data-urlencode "notify_discord_enabled=1" --data-urlencode "notify_discord_webhook_url=https://discord.com/api/webhooks/123/abc" \
+  "$BASE_URL/wp-admin/admin-ajax.php")
+echo "$SAVE_WITH_SECRET" | grep -q '"success":true' || { echo "FAIL: setup save for the clear-flag case failed. Response: $SAVE_WITH_SECRET"; exit 1; }
+BEFORE_CLEAR=$(wpr eval "echo \WPThistle\BackupRestore\Settings::get_all()['notify_discord_webhook_url'];")
+[ "$BEFORE_CLEAR" = "https://discord.com/api/webhooks/123/abc" ] || { echo "FAIL: webhook URL wasn't actually saved before the clear attempt. Got: '$BEFORE_CLEAR'"; exit 1; }
+SAVE_WITH_CLEAR=$(curl -s -c "$COOKIES" -b "$COOKIES" --data-urlencode "action=wpthistle_backup_save_settings" --data-urlencode "nonce=$NONCE4" \
+  --data-urlencode "nextcloud_url=https://nc-proxy.wpguard-test.local" --data-urlencode "nextcloud_user=$NC_BACKUP_USER" --data-urlencode "app_password=$APP_PASSWORD" --data-urlencode "remote_folder=wpguard-backups" \
+  --data-urlencode "notify_discord_enabled=1" --data-urlencode "notify_discord_webhook_url=" --data-urlencode "notify_discord_webhook_url_clear=1" \
+  "$BASE_URL/wp-admin/admin-ajax.php")
+echo "$SAVE_WITH_CLEAR" | grep -q '"success":true' || { echo "FAIL: the clear-flag save itself failed. Response: $SAVE_WITH_CLEAR"; exit 1; }
+AFTER_CLEAR=$(wpr eval "echo \WPThistle\BackupRestore\Settings::get_all()['notify_discord_webhook_url'];")
+[ "$AFTER_CLEAR" = "" ] || { echo "FAIL: the clear flag must blank the saved webhook URL via the real Save Settings endpoint, got '$AFTER_CLEAR'"; exit 1; }
+echo "OK  the clear flag blanks a previously saved notification credential via the real Save Settings endpoint"
+
+echo
 echo "=== NOTIFICATIONS E2E TEST PASSED ==="

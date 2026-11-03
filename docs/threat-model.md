@@ -205,29 +205,56 @@ Four LOW findings, two fixed same-day, two accepted below; two INFO notes.
   this was defense-in-depth catching up to its own documented reason
   for existing. Fixed: both forms are now listed in
   `Notifications::all_secret_values()`; covered by a new unit test.
-- **LOW-N-03, accepted, not fixed.** There is no way to clear a
-  notification credential to blank, only overwrite it (same
-  blank-keeps-current design as `app_password`, by necessity, since
-  every Save button submits the whole form and a masked field always
-  submits blank unless retyped). An admin who wants to revoke a leaked
-  webhook/token must do so at the provider and save a replacement; they
-  can't blank it from this plugin alone the way `forget_connection()`
-  lets them for the Nextcloud connection. Accepted because the admin
-  remains in full control of revocation at the source, and because
-  building a `forget_connection()`-style dedicated clear action for
-  each of 8 channels is a real chunk of added UI/code for a need that's
-  already served (if more awkwardly) by the provider's own revoke flow.
-  Revisit if this becomes a real point of friction in practice.
-- **LOW-N-04, accepted, not fixed.** `ajax_notify_test` has no rate
-  limit beyond the standard capability+nonce gate every privileged
-  action already uses. A stolen session could script repeated test
-  dispatches to burn third-party API quota (Pushover documents
-  10,000 messages/month per API token) and a few seconds of PHP
-  execution time per call. Accepted for now since the blast radius
-  (quota exhaustion, not data exposure) is low and the access required
-  (a valid authenticated admin session) already permits far more
-  damaging actions; a transient-based per-user cooldown is a cheap
-  follow-up if this ever proves to matter in practice.
+- **LOW-N-03, fixed (2.4.1).** There was no way to clear a notification
+  credential to blank, only overwrite it (same blank-keeps-current
+  design as `app_password`, by necessity, since every Save button
+  submits the whole form and a masked field always submits blank
+  unless retyped). An admin who wanted to revoke a leaked webhook/token
+  had to do so at the provider and save a replacement; nothing in this
+  plugin could blank it the way `forget_connection()` does for the
+  Nextcloud connection. Fixed: each of the 10 secret fields now has a
+  "Clear saved value" checkbox, rendered only when something is
+  actually saved. `Settings::save_secret_field()` honors a companion
+  `{$key}_clear` POST flag -- a genuinely retyped non-blank value still
+  wins over a stale clear flag in the same submission, so there's no
+  way to accidentally discard a real replacement. Covered by two new
+  unit tests and E2E Case K (the real Save Settings AJAX endpoint,
+  not just the pure function).
+- **LOW-N-04, fixed (2.4.1).** `ajax_notify_test` had no rate limit
+  beyond the standard capability+nonce gate every privileged action
+  already uses. A stolen session could script repeated test dispatches
+  to burn third-party API quota (Pushover documents 10,000
+  messages/month per API token) and a few seconds of PHP execution
+  time per call. Fixed: a 10-second site-wide cooldown -- site-wide
+  rather than per-user, since the point is capping how often this site
+  hits outside services at all, regardless of which admin is clicking.
+  Covered by E2E Case J (immediate repeat rejected, then succeeds
+  again once the cooldown passes).
+- **LOW-N-04-RESIDUAL, fixed (2.4.1, same day as LOW-N-04 itself).**
+  Vex's re-audit of the LOW-N-04 fix caught that a plain
+  `get_transient()`-then-`set_transient()` pair has a check-then-act
+  gap: concurrent requests (a scripted parallel burst, not just rapid
+  sequential ones) can all read "not set" before any of them writes
+  it, letting more than one through per 10s window. Fixed: the
+  cooldown is now an atomic claim via `add_option()` (`Admin::claim_notify_test_throttle()`)
+  -- a real MySQL `INSERT` unique on `option_name`, so two concurrent
+  callers can never both win it, same idiom
+  `Job_Store::claim_today()`/`claim_month()`/`claim_alert()` already
+  use against the jobs table. The stale-reclaim branch (once the
+  window has genuinely elapsed) keeps a narrower version of the same
+  race, bounded to once per window rather than ongoing abuse --
+  judged acceptable at that scope, not worth a full locking primitive
+  for a cooldown this short-lived.
+- **INFO-N-03, fixed (2.4.1).** Also caught in the same re-audit: the
+  10 new `{$key}_clear` POST flags were read with `! empty()`, which
+  treats any non-empty string as truthy -- including the literal
+  string `"false"`. Harmless with the JS as actually written (it only
+  ever sends `'1'` or `''`), but a future refactor sending a raw JS
+  boolean through `URLSearchParams`/`$.param()` would serialize
+  `false` as `"false"` and silently clear every credential on every
+  save. Fixed: a strict `'1' === ...` comparison
+  (`Admin::clear_flag()`) makes the wire contract explicit instead of
+  relying on the JS never changing.
 - **INFO-N-01 (fixed): the Notifications tab's disclosure banner and
   the matching FAQ entry undersold what actually gets sent.** Both
   omitted the settings-page link every channel receives and the plugin

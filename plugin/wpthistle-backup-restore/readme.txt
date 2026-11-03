@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.4.0
+Stable tag: 2.4.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -187,6 +187,9 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.4.1 =
+Two small follow-ups to the Notifications tab added in 2.4.0: each saved credential (webhook URL, token, key) now has a "Clear saved value" checkbox next to it, so you can actually remove one without typing a replacement. "Send Test Notification" now has a short cooldown between clicks, to avoid accidentally hammering whichever services you've connected.
 
 = 2.4.0 =
 New Notifications tab (between Backup Schedule and Advanced): get alerted the moment a scheduled backup fails or succeeds, without having to go check. Email is listed first, followed by eight third-party services -- Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, and a generic JSON webhook for anything else. A "Send Test Notification" button fires a one-off test message to every channel you've turned on, so you can confirm it's wired up correctly before relying on it.

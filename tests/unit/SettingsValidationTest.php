@@ -310,6 +310,41 @@ function test_notify_channel_secret_field_blank_submission_keeps_current_value()
 	wpguard_assert_equals( 'https://discord.com/api/webhooks/123/abc', Settings::get_all()['notify_discord_webhook_url'], 'a blank submission must never clear a previously saved webhook URL, same discipline as app_password' );
 }
 
+// Vex security audit finding LOW-N-03: a blank submission alone can
+// never clear a saved secret (by design, above), so there was no way
+// for an admin to actually remove one short of a raw DB edit. The
+// `{$key}_clear` flag closes that.
+function test_notify_channel_secret_field_clear_flag_blanks_the_stored_value() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://discord.com/api/webhooks/123/abc',
+	) );
+	$result = Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => '', 'notify_discord_webhook_url_clear' => true,
+	) );
+	wpguard_assert( true === $result['ok'], 'a save that clears a secret field must still succeed' );
+	wpguard_assert_equals( '', Settings::get_all()['notify_discord_webhook_url'], 'the clear flag must blank a previously saved webhook URL' );
+}
+
+// A retyped value in the SAME submission must win over a stale clear
+// flag, in case a future UI bug (or a tampered request) ever sends
+// both at once -- entering a real replacement value is unambiguous
+// intent, and should never be silently discarded.
+function test_notify_channel_secret_field_retyped_value_wins_over_clear_flag() {
+	$GLOBALS['__wpguard_test_options'] = array();
+	Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://discord.com/api/webhooks/123/abc',
+	) );
+	Settings::save( array(
+		'nextcloud_url' => 'https://nc.example.com', 'nextcloud_user' => 'u', 'remote_folder' => 'backups', 'app_password' => 'pw',
+		'notify_discord_enabled' => '1', 'notify_discord_webhook_url' => 'https://discord.com/api/webhooks/456/def', 'notify_discord_webhook_url_clear' => true,
+	) );
+	wpguard_assert_equals( 'https://discord.com/api/webhooks/456/def', Settings::get_all()['notify_discord_webhook_url'], 'a genuinely retyped value must win over a stale clear flag' );
+}
+
 function test_notify_gotify_url_is_plain_not_blank_keeps_current() {
 	$GLOBALS['__wpguard_test_options'] = array();
 	Settings::save( array(
@@ -650,6 +685,8 @@ return array(
 	'test_every_notification_channel_defaults_disabled',
 	'test_notify_channel_secret_fields_save_when_provided',
 	'test_notify_channel_secret_field_blank_submission_keeps_current_value',
+	'test_notify_channel_secret_field_clear_flag_blanks_the_stored_value',
+	'test_notify_channel_secret_field_retyped_value_wins_over_clear_flag',
 	'test_notify_gotify_url_is_plain_not_blank_keeps_current',
 	'test_notify_discord_webhook_url_rejects_wrong_host',
 	'test_notify_discord_webhook_url_accepts_real_host',
