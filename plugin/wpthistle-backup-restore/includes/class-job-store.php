@@ -67,8 +67,12 @@ class Job_Store {
 	 * wpthistle_backup_self_advance AJAX action and an attacker being
 	 * able to drive an arbitrary job forward -- see cron_advance()/
 	 * self_chain_advance()/ajax_self_advance() in the main plugin file.
-	 * NOT YET SECURITY-AUDITED; flagged there for a Vex pass before this
-	 * is considered production-ready.
+	 * Security-audited in the 2.1.0 scheduling/retention release (T25):
+	 * CLEAR TO SHIP, one MEDIUM (no rate limit on this endpoint --
+	 * accepted, a server-level fix, not a plugin one) and two LOW
+	 * (stale token survived terminal job states; chain-count cap
+	 * bypassable via a direct hit with a valid token) both fixed
+	 * same-day.
 	 */
 	/**
 	 * $origin ('manual' default, or 'scheduled' for a job started by one

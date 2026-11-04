@@ -12,12 +12,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class CA_Bundle {
 
-	/**
-	 * @return true|string True if valid, else a translated error string.
-	 */
 	/** A real CA bundle (even one with many intermediates) is a few KB; this is a generous ceiling, not a tight one. */
 	const MAX_BYTES = 1048576; // 1 MiB
 
+	/**
+	 * @return true|string True if valid, else a translated error string.
+	 */
 	public static function validate_path( string $path ) {
 		if ( ! is_readable( $path ) ) {
 			return __( 'CA bundle path does not exist or is not readable by the web server.', 'wpthistle-backup-restore' );

@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.4.1
+Stable tag: 2.5.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -187,6 +187,13 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.5.0 =
+Notifications now say who they're from. Email alerts get a real subject line (plugin and site name) and a proper HTML body with the WPThistle mark and a clear summary (plugin, site, result, backup ID, time, and the error if there was one). Discord, Slack, ntfy, Gotify, and Telegram messages now show the WPThistle icon alongside the alert; Pushover gets a link back to your settings page instead (no inline icon there -- a platform limitation, not an oversight).
+
+Fixed: the "Clear saved value" checkbox and "already saved" hint on the Notifications tab's credential fields now appear right after you save, instead of only after reloading the page.
+
+Reviewed by a security audit before release; one finding addressed: the test-notification cooldown added in 2.4.1 wasn't actually airtight under truly simultaneous requests. Fixed with a real lock, now covered by its own regression test proving exactly one request wins.
 
 = 2.4.1 =
 Two small follow-ups to the Notifications tab added in 2.4.0: each saved credential (webhook URL, token, key) now has a "Clear saved value" checkbox next to it, so you can actually remove one without typing a replacement. "Send Test Notification" now has a short cooldown between clicks, to avoid accidentally hammering whichever services you've connected.

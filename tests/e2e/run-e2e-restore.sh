@@ -125,12 +125,13 @@ QUARANTINED=$(docker exec wpguard-test-wp-restore-1 sh -c "find /var/www/html/wp
 [ -n "$QUARANTINED" ] || { echo "FAIL: pre-restore sentinel file was removed from its live path but not found anywhere under the rollback/quarantine directory -- it may have been deleted outright instead of quarantined"; exit 1; }
 echo "OK  pre-restore sentinel file (not part of the backup) was quarantined (moved aside), not deleted -- found at $QUARANTINED"
 
-BAK_TABLES=$(wp_restore db query "SHOW TABLES LIKE 'wpgbak%';" --skip-column-names 2>/dev/null | wc -l)
-[ "$BAK_TABLES" -gt 0 ] || { echo "FAIL: expected rollback (wpgbak-prefixed) tables from the pre-restore live DB, found none"; exit 1; }
-echo "OK  $BAK_TABLES rollback table(s) preserved under a wpgbak-prefixed name for manual recovery"
+# 2026-11-03: prefix renamed wpgbak -> wtbak (cosmetic, WPGuard-era leftover; see STATUS.md).
+BAK_TABLES=$(wp_restore db query "SHOW TABLES LIKE 'wtbak%';" --skip-column-names 2>/dev/null | wc -l)
+[ "$BAK_TABLES" -gt 0 ] || { echo "FAIL: expected rollback (wtbak-prefixed) tables from the pre-restore live DB, found none"; exit 1; }
+echo "OK  $BAK_TABLES rollback table(s) preserved under a wtbak-prefixed name for manual recovery"
 
-SHADOW_TABLES=$(wp_restore db query "SHOW TABLES LIKE 'wpgshd%';" --skip-column-names 2>/dev/null | wc -l)
-[ "$SHADOW_TABLES" -eq 0 ] || { echo "FAIL: expected zero leftover shadow (wpgshd-prefixed) tables after a successful swap, found $SHADOW_TABLES"; exit 1; }
+SHADOW_TABLES=$(wp_restore db query "SHOW TABLES LIKE 'wtshd%';" --skip-column-names 2>/dev/null | wc -l)
+[ "$SHADOW_TABLES" -eq 0 ] || { echo "FAIL: expected zero leftover shadow (wtshd-prefixed) tables after a successful swap, found $SHADOW_TABLES"; exit 1; }
 echo "OK  no leftover shadow tables after a successful swap"
 
 JOBS_TABLE_LIVE=$(wp_restore db query "SELECT COUNT(*) FROM ${PREFIX}wpthistle_backup_jobs;" --skip-column-names 2>/dev/null)

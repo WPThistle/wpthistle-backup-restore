@@ -12,6 +12,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! defined( 'WPTHISTLE_BACKUP_DIR' ) ) {
 	define( 'WPTHISTLE_BACKUP_DIR', ABSPATH . 'wp-content/plugins/wpthistle-backup-restore/' );
 }
+if ( ! defined( 'WPTHISTLE_BACKUP_URL' ) ) {
+	define( 'WPTHISTLE_BACKUP_URL', 'https://example.test/wp-content/plugins/wpthistle-backup-restore/' );
+}
 if ( ! defined( 'WP_CONTENT_DIR' ) ) {
 	define( 'WP_CONTENT_DIR', ABSPATH . 'wp-content' );
 }

@@ -60,7 +60,7 @@ class Job_Orchestrator {
 	// the browser tab and the WP-Cron fallback failing to pick it back
 	// up) rather than genuinely in-progress.
 	//
-	// the security audit delta audit, 2026-10-20 (LOW-JOB05-2): this value is NOT the
+	// the delta security audit, 2026-10-20 (LOW-JOB05-2): this value is NOT the
 	// real protection against reaping an active job -- try_lock() is.
 	// A single step_upload_parts() iteration can legitimately run far
 	// longer than this threshold once every per-attempt timeout and
@@ -171,21 +171,6 @@ class Job_Orchestrator {
 	}
 
 	/**
-	 * @param string $destination 'nextcloud' (default) or 'download' (Phase 3). Any other value falls back to 'nextcloud'.
-	 *
-	 * Phase 3, security audit finding MEDIUM-DL-3: has_running_job() then insert was a
-	 * plain check-then-act with no atomicity -- proven live, 5 concurrent
-	 * requests produced 5 distinct running jobs. For the Nextcloud path
-	 * this mostly wastes work; for 'download' it's worse, since cap-at-one
-	 * (sweep_download_bundles()) and the explicit-delete endpoint both
-	 * assume at most one pending bundle exists -- the audit proved a
-	 * second verified bundle getting silently destroyed by a delete call
-	 * for the first job's job_id. A short-lived MySQL advisory lock
-	 * (same GET_LOCK/RELEASE_LOCK primitive Job_Store already uses for
-	 * per-job locking, here keyed globally since no job_id exists yet)
-	 * closes the whole check-then-act window, not just the download case.
-	 */
-	/**
 	 * security audit finding NEW-LOW-2 (re-verification, 2026-10-21): a bare static
 	 * lock name would contend with an unrelated site sharing the same
 	 * MySQL server under a different database/prefix (common on shared
@@ -203,6 +188,21 @@ class Job_Orchestrator {
 		return 'wpthistle_backup_create_' . substr( md5( Settings::get_site_id() ), 0, 20 );
 	}
 
+	/**
+	 * @param string $destination 'nextcloud' (default) or 'download' (Phase 3). Any other value falls back to 'nextcloud'.
+	 *
+	 * Phase 3, security audit finding MEDIUM-DL-3: has_running_job() then insert was a
+	 * plain check-then-act with no atomicity -- proven live, 5 concurrent
+	 * requests produced 5 distinct running jobs. For the Nextcloud path
+	 * this mostly wastes work; for 'download' it's worse, since cap-at-one
+	 * (sweep_download_bundles()) and the explicit-delete endpoint both
+	 * assume at most one pending bundle exists -- the audit proved a
+	 * second verified bundle getting silently destroyed by a delete call
+	 * for the first job's job_id. A short-lived MySQL advisory lock
+	 * (same GET_LOCK/RELEASE_LOCK primitive Job_Store already uses for
+	 * per-job locking, here keyed globally since no job_id exists yet)
+	 * closes the whole check-then-act window, not just the download case.
+	 */
 	public static function create_job( string $destination = 'nextcloud', string $origin = 'manual' ): string {
 		$destination = in_array( $destination, array( 'nextcloud', 'download' ), true ) ? $destination : 'nextcloud';
 		$origin = in_array( $origin, array( 'manual', 'scheduled' ), true ) ? $origin : 'manual';
@@ -1285,36 +1285,42 @@ class Job_Orchestrator {
 		if ( $keep <= 0 ) {
 			return;
 		}
-		try {
-			$parent_rel = $client->relative_path( Settings::get_site_id() . '/backups' );
-			$result = Retention::prune( $client, $parent_rel, $keep );
-			if ( is_wp_error( $result ) ) {
-				$message = self::logger()->redact( $result->get_error_message() );
-				self::log( $job_id, 'finalize', 'warning', 'Retention pruning did not fully complete: ' . $message );
-				update_option( self::RETENTION_ERROR_OPTION, $message, false );
-				return;
+		self::run_retention_prune(
+			$job_id,
+			function () use ( $client, $keep ) {
+				$parent_rel = $client->relative_path( Settings::get_site_id() . '/backups' );
+				return Retention::prune( $client, $parent_rel, $keep );
 			}
-			update_option( self::RETENTION_ERROR_OPTION, '', false );
-			if ( ! empty( $result['deleted'] ) ) {
-				self::log( $job_id, 'finalize', 'info', sprintf( 'Retention: removed %d old backup(s), kept %d.', count( $result['deleted'] ), $result['kept'] ) );
-			}
-		} catch ( \Throwable $e ) {
-			$message = self::logger()->redact( $e->getMessage() );
-			self::log( $job_id, 'finalize', 'warning', 'Retention pruning threw an unexpected error: ' . $message );
-			update_option( self::RETENTION_ERROR_OPTION, $message, false );
-		}
+		);
 	}
 
-	/** Phase 5: the tiered-retention counterpart of maybe_prune_old_backups() above -- same never-affects-job-status, fail-closed-logged discipline. */
+	/** Phase 5: the tiered-retention counterpart of maybe_prune_old_backups() above -- same never-affects-job-status, fail-closed-logged discipline, via the shared run_retention_prune() wrapper below. */
 	private static function maybe_prune_old_backups_tiered( string $job_id, Nextcloud_Client $client ): void {
 		$tiers = Settings::get_retention_tiers();
 		if ( 0 === $tiers['daily'] && 0 === $tiers['weekly'] && 0 === $tiers['monthly'] ) {
 			return;
 		}
+		self::run_retention_prune(
+			$job_id,
+			function () use ( $client, $tiers ) {
+				$parent_rel = $client->relative_path( Settings::get_site_id() . '/backups' );
+				$tiers['timezone'] = wp_timezone();
+				return Retention::prune_tiered( $client, $parent_rel, $tiers );
+			}
+		);
+	}
+
+	/**
+	 * Shared try/catch + RETENTION_ERROR_OPTION/logging wrapper, used
+	 * identically by both prune paths above (they used to carry this
+	 * scaffolding twice, byte-for-byte). Deliberately swallows every
+	 * failure rather than letting it propagate: a retention problem
+	 * must never fail the backup job it runs at the end of -- only get
+	 * logged and surfaced via the admin-visible error option.
+	 */
+	private static function run_retention_prune( string $job_id, callable $prune ): void {
 		try {
-			$parent_rel = $client->relative_path( Settings::get_site_id() . '/backups' );
-			$tiers['timezone'] = wp_timezone();
-			$result = Retention::prune_tiered( $client, $parent_rel, $tiers );
+			$result = $prune();
 			if ( is_wp_error( $result ) ) {
 				$message = self::logger()->redact( $result->get_error_message() );
 				self::log( $job_id, 'finalize', 'warning', 'Retention pruning did not fully complete: ' . $message );

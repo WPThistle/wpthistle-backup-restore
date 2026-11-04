@@ -31,7 +31,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * restore_preflight are entirely read-only with respect to the live
  * site -- every check that can fail safely happens before anything
  * live is touched. restore_apply_db onward is the point of no return;
- * failure there leaves clearly-labeled recovery artifacts (a `_wpgbak_`
+ * failure there leaves clearly-labeled recovery artifacts (a `_wtbak_`
  * table-prefix snapshot of what was live, and a rollback files
  * directory) rather than attempting automatic rollback, which would be
  * its own large source of new bugs.
@@ -410,9 +410,9 @@ class Restore_Orchestrator {
 			Job_Store::update( $job_id, array(
 				'step'       => 'restore_acquire',
 				'checkpoint' => array(
-					'kind'                  => 'restore',
-					'source'                => $source,
-					'confirm_url_mismatch'  => $confirm_url_mismatch,
+					'kind'                 => 'restore',
+					'source'               => $source,
+					'confirm_url_mismatch' => $confirm_url_mismatch,
 				),
 			) );
 			return $job_id;
@@ -909,10 +909,10 @@ class Restore_Orchestrator {
 		// wholesale (DB_Exporter only excludes the single
 		// Settings::OPTION_KEY *row*, nothing else plugin-related).
 		$cp['captured_options'] = array(
-			Settings::OPTION_KEY                     => get_option( Settings::OPTION_KEY, array() ),
+			Settings::OPTION_KEY                      => get_option( Settings::OPTION_KEY, array() ),
 			Settings::SITE_ID_KEY                     => get_option( Settings::SITE_ID_KEY, '' ),
-			Backup_Chain::STATE_OPTION                => get_option( Backup_Chain::STATE_OPTION, null ),
-			'wpthistle_backup_db_schema_version'             => get_option( 'wpthistle_backup_db_schema_version', 0 ),
+			Backup_Chain::STATE_OPTION                 => get_option( Backup_Chain::STATE_OPTION, null ),
+			'wpthistle_backup_db_schema_version'       => get_option( 'wpthistle_backup_db_schema_version', 0 ),
 			Job_Orchestrator::RETENTION_ERROR_OPTION   => get_option( Job_Orchestrator::RETENTION_ERROR_OPTION, '' ),
 		);
 
@@ -935,8 +935,13 @@ class Restore_Orchestrator {
 		self::write_blob( $job_id, 'quarantine_candidates', $quarantine_candidates );
 		$cp['quarantine_candidates_count'] = count( $quarantine_candidates );
 
-		$cp['shadow_prefix'] = 'wpgshd' . substr( md5( $job_id ), 0, 8 ) . '_';
-		$cp['backup_table_prefix'] = 'wpgbak' . substr( md5( $job_id . 'bak' ), 0, 8 ) . '_';
+		// Cosmetic rename (2026-11-03): these were 'wpgshd'/'wpgbak', a
+		// WPGuard-era leftover from before the 2.0.0 project rename.
+		// Purely a naming string -- computed fresh per job, never
+		// pattern-matched or persisted anywhere outside this job's own
+		// checkpoint, so renaming it has no effect on any other code path.
+		$cp['shadow_prefix'] = 'wtshd' . substr( md5( $job_id ), 0, 8 ) . '_';
+		$cp['backup_table_prefix'] = 'wtbak' . substr( md5( $job_id . 'bak' ), 0, 8 ) . '_';
 		$cp['rollback_dir'] = self::tmp_dir_for( $job_id ) . 'rollback-files/';
 		self::ensure_tmp_guarded( $cp['rollback_dir'] );
 

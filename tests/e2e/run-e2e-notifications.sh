@@ -350,6 +350,31 @@ echo "$AFTER_COOLDOWN" | grep -q '"success":true' || { echo "FAIL: test-notifica
 echo "OK  test-notification works again once the cooldown has passed"
 
 echo
+echo "=== Case J (parallel burst, Vex T28 LOW-N-04-RESIDUAL reopened): N genuinely simultaneous claim calls after the cooldown has elapsed must allow exactly 1 through ==="
+# Real regression test for the exact bug Vex found and fixed: the 2.4.1
+# "fix" below used add_option() alone, which is only atomic on an
+# option's very first-ever insert -- every call after that fell through
+# to a plain read-compare-write with no atomicity. Proven live by Vex via
+# a barrier-synchronized PHP harness (6 of 12 truly concurrent calls won
+# a race that should allow exactly 1); this reproduces that same
+# barrier-synchronization approach as a standing E2E case, not a curl
+# burst (HTTP/process scheduling jitter could serialize curl requests
+# enough to never actually exercise the race, giving a false pass).
+sleep 11
+BURST_DIR=$(mktemp -d)
+BARRIER=$(date -d '+5 seconds' +%s.%N)
+for i in $(seq 1 12); do
+  wpr eval-file /fixtures/notify-throttle-claim.php "$BARRIER" > "$BURST_DIR/r$i.log" 2>&1 &
+done
+wait
+BURST_WINS=$(grep -l '^WIN' "$BURST_DIR"/r*.log | wc -l | tr -d ' ')
+BURST_TOTAL=$(ls "$BURST_DIR"/r*.log | wc -l | tr -d ' ')
+rm -rf "$BURST_DIR"
+[ "$BURST_TOTAL" = "12" ] || { echo "FAIL: expected 12 burst processes to report in, got $BURST_TOTAL"; exit 1; }
+[ "$BURST_WINS" = "1" ] || { echo "FAIL: expected exactly 1 of 12 genuinely simultaneous claim calls to win, got $BURST_WINS. This is the exact race Vex proved live (6/12 wins against the old add_option()-only guard)."; exit 1; }
+echo "OK  exactly 1 of 12 genuinely simultaneous claim calls won the claim (real compare-and-swap holds under true concurrency)"
+
+echo
 echo "=== Case K (Vex LOW-N-03): the 'Clear saved value' flag actually blanks a saved credential via the real Save Settings endpoint ==="
 PAGE4=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
 NONCE4=$(echo "$PAGE4" | sed -n 's/.*var nonce = "\([a-f0-9]*\)".*/\1/p')

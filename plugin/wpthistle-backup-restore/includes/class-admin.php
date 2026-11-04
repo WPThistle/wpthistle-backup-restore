@@ -127,17 +127,26 @@ class Admin {
 
 	/**
 	 * Vex security audit finding LOW-N-03: pairs with Settings::save_secret_field()'s
-	 * new `{$key}_clear` flag. Only rendered when there is actually
-	 * something saved to clear -- nothing to offer otherwise, and it
-	 * keeps a field with nothing saved from growing a checkbox that
-	 * would do nothing.
+	 * new `{$key}_clear` flag. The checkbox itself is only rendered when
+	 * there is actually something saved to clear -- nothing to offer
+	 * otherwise, and it keeps a field with nothing saved from growing a
+	 * checkbox that would do nothing.
+	 *
+	 * 2026-11-03: the enclosing `<span id="..._clear_wrap">` is now ALWAYS
+	 * rendered, checkbox present or not, so it's a stable insertion point
+	 * syncSecretFieldUi() (below, JS) can fill in or empty out right after
+	 * an AJAX save -- without this, a field that went from empty to saved
+	 * (or saved to cleared) via Save Settings had no checkbox/placeholder
+	 * update at all until a full page reload, since this PHP only ever
+	 * ran once, at the page's initial server-side render.
 	 */
 	private function clear_secret_checkbox( string $field_id, string $current_value ): string {
-		if ( '' === $current_value ) {
-			return '';
+		$inner = '';
+		if ( '' !== $current_value ) {
+			$inner = '<label style="margin-left:8px;font-weight:normal;"><input type="checkbox" id="wpthistle_backup_' . esc_attr( $field_id ) . '_clear"> '
+				. esc_html__( 'Clear saved value', 'wpthistle-backup-restore' ) . '</label>';
 		}
-		return '<label style="margin-left:8px;font-weight:normal;"><input type="checkbox" id="wpthistle_backup_' . esc_attr( $field_id ) . '_clear"> '
-			. esc_html__( 'Clear saved value', 'wpthistle-backup-restore' ) . '</label>';
+		return '<span id="wpthistle_backup_' . esc_attr( $field_id ) . '_clear_wrap">' . $inner . '</span>';
 	}
 
 	/**
@@ -152,6 +161,20 @@ class Admin {
 	 */
 	private function clear_flag( string $key ): bool {
 		return isset( $_POST[ $key ] ) && '1' === (string) $_POST[ $key ];
+	}
+
+	/**
+	 * The one "Buy me a coffee" anchor markup, reused verbatim as the %s
+	 * in six different printf() sentences across this file (Home, Connection,
+	 * Backup Schedule, Advanced, and Notifications tabs, plus the family hub
+	 * footer) -- each call site keeps its own distinct sentence (the owner's
+	 * approved per-tab wording), only the repeated markup itself is shared
+	 * here. The URL is the only part of this that must stay byte-identical;
+	 * it's also referenced independently by readme.txt's Donate link and
+	 * add_donate_row_meta() in wpthistle-backup-restore.php.
+	 */
+	private function coffee_link(): string {
+		return '<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>';
 	}
 
 	public function add_menu(): void {
@@ -284,7 +307,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'Built by a human, assembled by AI, running on coffee ☕ -- if WPThistle saved your bacon, the bots would not say no to a refill. %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					$this->coffee_link()
 				);
 				?>
 			</p>
@@ -496,30 +519,54 @@ class Admin {
 	}
 
 	/**
-	 * Vex security audit finding LOW-N-04-RESIDUAL: a plain
-	 * get_transient()-then-set_transient() pair has a check-then-act gap
-	 * -- two concurrent requests can both read "not set" before either
-	 * one writes it. add_option() is a real MySQL INSERT, unique on
-	 * option_name, so two concurrent callers can never both win it; one
-	 * gets true, the other false. Same atomic-claim idiom
-	 * Job_Store::claim_today()/claim_month()/claim_alert() already use
-	 * for the exact same reason, just against wp_options instead of the
-	 * jobs table. The stale-reclaim branch below (once the window has
-	 * genuinely elapsed) keeps a narrow re-claim race of its own, but
-	 * only once per 10s window -- same bound the original transient
-	 * already had, a single burst rather than ongoing abuse.
+	 * Vex security audit, reopened LOW-N-04-RESIDUAL (2026-11-03,
+	 * threat-model T28): the 2.4.1 "fix" below used to be
+	 * add_option()-then-fallback, which looked atomic but wasn't past
+	 * the very first call ever made. add_option() runs its own
+	 * get_option() pre-check first -- once this option has any stored
+	 * value at all (true after the first test-notification click,
+	 * forever after), every later call skips the INSERT path entirely
+	 * and falls straight into a plain read-compare-write with no
+	 * atomicity, the exact TOCTOU shape this was supposed to close.
+	 * Proven live: 6 of 12 concurrent calls won a race that should
+	 * allow exactly 1.
+	 *
+	 * Fixed with a real compare-and-swap: INSERT IGNORE as the one-time
+	 * claim (a true no-op on collision, unlike add_option()'s UPSERT,
+	 * which returns truthy for a second caller even when its $now
+	 * differs by only one second), then an UPDATE ... WHERE
+	 * option_value = $existing as the steady-state claim -- only the
+	 * caller whose UPDATE still finds the value it just read wins; any
+	 * other concurrent caller gets 0 affected rows and false. The
+	 * SELECT reads $wpdb directly rather than through get_option(),
+	 * which would route through the object cache: under a persistent
+	 * cache layer (Redis/Memcached) a cached stale read would make the
+	 * WHERE clause never match, permanently locking the button out
+	 * rather than just rate-limiting it.
 	 */
 	private static function claim_notify_test_throttle(): bool {
+		global $wpdb;
 		$now = time();
-		if ( add_option( self::NOTIFY_TEST_THROTTLE_KEY, $now, '', 'no' ) ) {
+		if ( $wpdb->query( $wpdb->prepare(
+			"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+			self::NOTIFY_TEST_THROTTLE_KEY,
+			(string) $now
+		) ) > 0 ) {
 			return true;
 		}
-		$existing = (int) get_option( self::NOTIFY_TEST_THROTTLE_KEY, 0 );
-		if ( $now - $existing < self::NOTIFY_TEST_THROTTLE_SECONDS ) {
+		$existing = $wpdb->get_var( $wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+			self::NOTIFY_TEST_THROTTLE_KEY
+		) );
+		if ( null === $existing || $now - (int) $existing < self::NOTIFY_TEST_THROTTLE_SECONDS ) {
 			return false;
 		}
-		update_option( self::NOTIFY_TEST_THROTTLE_KEY, $now, 'no' );
-		return true;
+		return $wpdb->query( $wpdb->prepare(
+			"UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s",
+			(string) $now,
+			self::NOTIFY_TEST_THROTTLE_KEY,
+			$existing
+		) ) > 0;
 	}
 
 	/**
@@ -974,7 +1021,7 @@ class Admin {
 
 			<h2><?php esc_html_e( 'Restore', 'wpthistle-backup-restore' ); ?></h2>
 			<p class="description"><strong><?php esc_html_e( 'This overwrites this site\'s current content and database with a chosen backup, in place.', 'wpthistle-backup-restore' ); ?></strong>
-			<?php esc_html_e( 'Nothing is ever permanently deleted by it — anything it replaces is renamed aside (database tables under a "wpgbak…" prefix, files into a timestamped rollback folder) for manual recovery, never dropped outright. Still: back up anything you cannot afford to lose before using this on a site that matters.', 'wpthistle-backup-restore' ); ?></p>
+			<?php esc_html_e( 'Nothing is ever permanently deleted by it — anything it replaces is renamed aside (database tables under a "wtbak…" prefix, files into a timestamped rollback folder) for manual recovery, never dropped outright. Still: back up anything you cannot afford to lose before using this on a site that matters.', 'wpthistle-backup-restore' ); ?></p>
 			<table class="form-table" role="presentation">
 				<tr>
 					<th><?php esc_html_e( 'Source', 'wpthistle-backup-restore' ); ?></th>
@@ -1009,7 +1056,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'If this backup just saved you a bad day, a coffee goes a long way. %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					$this->coffee_link()
 				);
 				?>
 			</p>
@@ -1075,7 +1122,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'No paywall, no upsells, just a working connection. If that is worth something to you: %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					$this->coffee_link()
 				);
 				?>
 			</p>
@@ -1170,7 +1217,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'Set it and forget it, no subscription required. A coffee helps keep it that way: %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					$this->coffee_link()
 				);
 				?>
 			</p>
@@ -1205,7 +1252,7 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_discord_enabled" <?php checked( $settings['notify_discord_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_discord_webhook_url"><?php esc_html_e( 'Webhook URL', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_discord_webhook_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_discord_webhook_url'], __( 'https://discord.com/api/webhooks/...', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_discord_webhook_url" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'https://discord.com/api/webhooks/...', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_discord_webhook_url'], __( 'https://discord.com/api/webhooks/...', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_discord_webhook_url', $settings['notify_discord_webhook_url'] ); ?>
 						<p class="description"><?php esc_html_e( 'Create an incoming webhook under your Discord channel\'s Integrations settings, then paste its URL here.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1215,7 +1262,7 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_slack_enabled" <?php checked( $settings['notify_slack_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_slack_webhook_url"><?php esc_html_e( 'Webhook URL', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_slack_webhook_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_slack_webhook_url'], __( 'https://hooks.slack.com/services/...', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_slack_webhook_url" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'https://hooks.slack.com/services/...', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_slack_webhook_url'], __( 'https://hooks.slack.com/services/...', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_slack_webhook_url', $settings['notify_slack_webhook_url'] ); ?>
 						<p class="description"><?php esc_html_e( 'Create an incoming webhook app in your Slack workspace, then paste its webhook URL here.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1225,10 +1272,10 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_pushover_enabled" <?php checked( $settings['notify_pushover_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_pushover_user_key"><?php esc_html_e( 'User Key', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_pushover_user_key" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_user_key'], __( 'from your Pushover dashboard', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_pushover_user_key" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'from your Pushover dashboard', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_user_key'], __( 'from your Pushover dashboard', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_pushover_user_key', $settings['notify_pushover_user_key'] ); ?><br>
 						<label for="wpthistle_backup_notify_pushover_api_token"><?php esc_html_e( 'API Token', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_pushover_api_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_api_token'], __( 'from your own registered application', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_pushover_api_token" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'from your own registered application', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushover_api_token'], __( 'from your own registered application', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_pushover_api_token', $settings['notify_pushover_api_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'Register your own free application at pushover.net/apps/build to get an API Token; your User Key is on your Pushover dashboard.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1238,7 +1285,7 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_pushbullet_enabled" <?php checked( $settings['notify_pushbullet_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_pushbullet_access_token"><?php esc_html_e( 'Access Token', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_pushbullet_access_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushbullet_access_token'], __( 'from Account Settings', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_pushbullet_access_token" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'from Account Settings', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_pushbullet_access_token'], __( 'from Account Settings', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_pushbullet_access_token', $settings['notify_pushbullet_access_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'Generate an Access Token under your Pushbullet account\'s Settings.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1248,10 +1295,10 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_ntfy_enabled" <?php checked( $settings['notify_ntfy_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_ntfy_url"><?php esc_html_e( 'Topic URL', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_ntfy_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_url'], __( 'https://ntfy.sh/your-topic-name', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_ntfy_url" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'https://ntfy.sh/your-topic-name', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_url'], __( 'https://ntfy.sh/your-topic-name', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_ntfy_url', $settings['notify_ntfy_url'] ); ?><br>
 						<label for="wpthistle_backup_notify_ntfy_token"><?php esc_html_e( 'Access Token (optional)', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_ntfy_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_token'], __( 'only for a private/self-hosted topic', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_ntfy_token" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'only for a private/self-hosted topic', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_ntfy_token'], __( 'only for a private/self-hosted topic', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_ntfy_token', $settings['notify_ntfy_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'The full URL you would use to subscribe to a topic, on ntfy.sh or your own self-hosted server. If using the public ntfy.sh service, pick an unguessable topic name; anyone who knows it can read or publish to it.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1263,7 +1310,7 @@ class Admin {
 						<label for="wpthistle_backup_notify_gotify_url"><?php esc_html_e( 'Server URL', 'wpthistle-backup-restore' ); ?></label>
 						<input type="text" id="wpthistle_backup_notify_gotify_url" value="<?php echo esc_attr( $settings['notify_gotify_url'] ); ?>" class="regular-text" placeholder="https://gotify.example.com"><br>
 						<label for="wpthistle_backup_notify_gotify_token"><?php esc_html_e( 'App Token', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_gotify_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_gotify_token'], __( 'created under Gotify\'s Apps section', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_gotify_token" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'created under Gotify\'s Apps section', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_gotify_token'], __( 'created under Gotify\'s Apps section', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_gotify_token', $settings['notify_gotify_token'] ); ?>
 						<p class="description"><?php esc_html_e( 'Your self-hosted Gotify server\'s base URL, and an application token created under its Apps section.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1273,7 +1320,7 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_telegram_enabled" <?php checked( $settings['notify_telegram_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_telegram_bot_token"><?php esc_html_e( 'Bot Token', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_telegram_bot_token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_telegram_bot_token'], __( 'from @BotFather', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_telegram_bot_token" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'from @BotFather', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_telegram_bot_token'], __( 'from @BotFather', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_telegram_bot_token', $settings['notify_telegram_bot_token'] ); ?><br>
 						<label for="wpthistle_backup_notify_telegram_chat_id"><?php esc_html_e( 'Chat ID', 'wpthistle-backup-restore' ); ?></label>
 						<input type="text" id="wpthistle_backup_notify_telegram_chat_id" value="<?php echo esc_attr( $settings['notify_telegram_chat_id'] ); ?>" class="regular-text" placeholder="123456789">
@@ -1285,7 +1332,7 @@ class Admin {
 					<td>
 						<label><input type="checkbox" id="wpthistle_backup_notify_webhook_enabled" <?php checked( $settings['notify_webhook_enabled'] ); ?>> <?php esc_html_e( 'Enable', 'wpthistle-backup-restore' ); ?></label><br>
 						<label for="wpthistle_backup_notify_webhook_url"><?php esc_html_e( 'Webhook URL', 'wpthistle-backup-restore' ); ?></label>
-						<input type="password" id="wpthistle_backup_notify_webhook_url" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_webhook_url'], __( 'https://...', 'wpthistle-backup-restore' ) ) ); ?>">
+						<input type="password" id="wpthistle_backup_notify_webhook_url" value="" class="regular-text" autocomplete="new-password" data-empty-hint="<?php echo esc_attr( __( 'https://...', 'wpthistle-backup-restore' ) ); ?>" placeholder="<?php echo esc_attr( $this->secret_field_placeholder( $settings['notify_webhook_url'], __( 'https://...', 'wpthistle-backup-restore' ) ) ); ?>">
 						<?php echo $this->clear_secret_checkbox( 'notify_webhook_url', $settings['notify_webhook_url'] ); ?>
 						<p class="description"><?php esc_html_e( 'Posts a structured JSON payload (event, site, backup ID, status, error) to this URL instead of a formatted message. Useful for automation tools like n8n, Home Assistant, or a custom listener. Covers anything not named above.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
@@ -1302,7 +1349,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'Eight channels, zero of them costing you a subscription. %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					$this->coffee_link()
 				);
 				?>
 			</p>
@@ -1328,7 +1375,7 @@ class Admin {
 				printf(
 					/* translators: %s: "Buy me a coffee" link. */
 					esc_html__( 'None of this phones home, and none of it ever will. %s', 'wpthistle-backup-restore' ),
-					'<a href="https://buymeacoffee.com/ItsMNLOP" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Buy me a coffee', 'wpthistle-backup-restore' ) . '</a>'
+					$this->coffee_link()
 				);
 				?>
 			</p>
@@ -1340,6 +1387,14 @@ class Admin {
 			var ajaxUrl = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
 			var nonce = <?php echo wp_json_encode( $nonce ); ?>;
 			var downloadNonce = <?php echo wp_json_encode( $download_nonce ); ?>;
+			// 2026-11-03: same two strings PHP already uses for
+			// secret_field_placeholder()/clear_secret_checkbox() above,
+			// passed through once so syncSecretFieldUi() (below) can
+			// reproduce their exact server-rendered markup/text after an
+			// AJAX save, instead of a full page reload being the only way
+			// to see a just-saved field's placeholder/checkbox update.
+			var SAVED_PLACEHOLDER_TEXT = <?php echo wp_json_encode( __( 'Saved (leave blank to keep)', 'wpthistle-backup-restore' ) ); ?>;
+			var CLEAR_LABEL_TEXT = <?php echo wp_json_encode( __( 'Clear saved value', 'wpthistle-backup-restore' ) ); ?>;
 			var currentJobId = null;
 			var currentRestoreJobId = null;
 			var currentUploadToken = null;
@@ -1400,6 +1455,44 @@ class Admin {
 				clearCheckboxIds.forEach(function(id){
 					var el = document.getElementById(id);
 					if (el) { el.checked = false; }
+				});
+			}
+
+			/**
+			 * 2026-11-03 (the owner's report: the "Clear saved value" checkbox
+			 * and "Saved (leave blank to keep)" placeholder only ever
+			 * appeared after a full page reload, never right after an
+			 * AJAX save). Settings::save_secret_field() was always
+			 * correct server-side -- this was purely the DOM never being
+			 * told the save happened, since clear_secret_checkbox()/
+			 * secret_field_placeholder() above only ever run once, at
+			 * the page's initial server render.
+			 *
+			 * $clearedFieldIds is captured by the caller BEFORE
+			 * resetClearCheckboxes() runs (which unchecks every _clear
+			 * box), since that's the only record of which fields were
+			 * actually cleared in the save that just completed.
+			 */
+			function syncSecretFieldUi(clearedFieldIds) {
+				clearCheckboxIds.forEach(function(clearId){
+					var baseId = clearId.replace(/_clear$/, '');
+					var input  = document.getElementById(baseId);
+					var wrap   = document.getElementById(baseId + '_clear_wrap');
+					if (!input || !wrap) { return; }
+					if (clearedFieldIds.indexOf(baseId) !== -1) {
+						// Cleared this save: back to the empty-field hint, no checkbox left to offer.
+						input.placeholder = input.getAttribute('data-empty-hint') || '';
+						input.value = '';
+						wrap.innerHTML = '';
+					} else if ('' !== input.value) {
+						// A real value was just typed and saved: show it as saved, never the typed text itself.
+						input.placeholder = SAVED_PLACEHOLDER_TEXT;
+						input.value = '';
+						wrap.innerHTML = '<label style="margin-left:8px;font-weight:normal;"><input type="checkbox" id="' + baseId + '_clear"> ' + CLEAR_LABEL_TEXT + '</label>';
+						var newCheckbox = document.getElementById(clearId);
+						if (newCheckbox) { newCheckbox.addEventListener('change', function(){ settingsDirty = true; }); }
+					}
+					// Else: untouched this save (still blank and not cleared, or already saved and left alone) -- nothing to update.
 				});
 			}
 			clearCheckboxIds.forEach(function(id){
@@ -1548,9 +1641,30 @@ class Admin {
 				}).then(function(res){
 					document.getElementById(resultElId).textContent = res.data.message;
 					if (res.success) {
+						// Captured BEFORE resetClearCheckboxes() unchecks everything --
+						// this is the only record of which fields this save actually cleared.
+						var clearedFieldIds = clearCheckboxIds.filter(function(id){
+							var el = document.getElementById(id);
+							return el && el.checked;
+						}).map(function(id){ return id.replace(/_clear$/, ''); });
 						settingsDirty = false;
-						captureSavedValues();
 						resetClearCheckboxes();
+						// Vex security audit, 2026-11-03 (LOW-V-05):
+						// syncSecretFieldUi MUST run before captureSavedValues.
+						// captureSavedValues snapshots el.value for every field
+						// in settingsFieldIds, which includes the 10 password-type
+						// credential inputs. If captureSavedValues runs first, a
+						// field that was just typed into and saved still holds its
+						// plaintext value -- that value is then captured into
+						// lastSavedValues and later written back to the input by
+						// revertToLastSaved() on the next tab-switch-without-saving,
+						// exposing the credential in the DOM. syncSecretFieldUi
+						// sets input.value = '' for every just-saved or just-cleared
+						// field first; captureSavedValues running after it only ever
+						// snapshots '' for all secret fields -- the correct revert
+						// target regardless.
+						syncSecretFieldUi(clearedFieldIds);
+						captureSavedValues();
 					}
 				});
 			}

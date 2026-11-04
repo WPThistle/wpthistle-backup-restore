@@ -238,13 +238,26 @@ Four LOW findings, two fixed same-day, two accepted below; two INFO notes.
   it, letting more than one through per 10s window. Fixed: the
   cooldown is now an atomic claim via `add_option()` (`Admin::claim_notify_test_throttle()`)
   -- a real MySQL `INSERT` unique on `option_name`, so two concurrent
-  callers can never both win it, same idiom
-  `Job_Store::claim_today()`/`claim_month()`/`claim_alert()` already
-  use against the jobs table. The stale-reclaim branch (once the
+  callers can never both win it, same idiom `claim_today()`/`claim_month()`
+  (free functions in the main plugin file, against `wp_options`) and
+  `Job_Store::claim_alert()` (against the jobs table) already use, each
+  against its own storage. The stale-reclaim branch (once the
   window has genuinely elapsed) keeps a narrower version of the same
   race, bounded to once per window rather than ongoing abuse --
   judged acceptable at that scope, not worth a full locking primitive
   for a cooldown this short-lived.
+  **Reopened 2026-11-03 (see T28):** the `add_option()` guard is not
+  fully atomic even on the first-ever call (concurrent callers whose
+  `$now` values differ by one second both win via UPSERT — proven live),
+  and is bypassed entirely after the first use (`add_option()`'s own
+  `get_option()` early-return fires immediately whenever the option has
+  any stored value, sending every subsequent call straight to the
+  non-atomic stale-reclaim branch with no WHERE condition on its
+  `update_option()` write). That path is a plain TOCTOU, live-proven to
+  produce 6 out of 12 WINs on a barrier-synchronized parallel burst.
+  **Fixed for real, 2026-11-03 (T28)** — a true compare-and-swap via
+  direct `$wpdb` queries, confirmed back to exactly 1/12 wins under the
+  same barrier-synchronized burst, now a standing E2E regression case.
 - **INFO-N-03, fixed (2.4.1).** Also caught in the same re-audit: the
   10 new `{$key}_clear` POST flags were read with `! empty()`, which
   treats any non-empty string as truthy -- including the literal
@@ -270,6 +283,279 @@ Four LOW findings, two fixed same-day, two accepted below; two INFO notes.
   always origin='manual' and therefore never notifies regardless.
   Revisit only if scheduled download-destination backups are ever
   built.
+
+## T28 — Atomic-claim consolidation review; LOW-N-04-RESIDUAL stale-reclaim gap re-audit
+
+Vex security audit, SOP-023, 2026-11-03 (WordPress 7.1.3, confirmed against
+`wp-includes/option.php` and `class-wpdb.php` on the installed stack), scoped to the four
+atomic-claim implementations surfaced during Holt's codebase cleanup pass:
+`claim_today()`/`claim_month()`/`claim_period()` in `wpthistle-backup-restore.php`,
+`Job_Store::claim_alert()` in `class-job-store.php`, and `Admin::claim_notify_test_throttle()`
+in `class-admin.php`. **Consolidation verdict: do not consolidate — three distinct mechanisms,
+not one reusable idiom.** **One OPEN LOW finding requires Holt implementation after the owner's
+approval. LOW-N-04-RESIDUAL cannot be marked fully cleared until that fix ships.**
+
+### Part 1 — Consolidation verdict
+
+**Group A — `claim_today()`/`claim_month()` via `claim_period()`.** Already consolidated.
+Both are one-liners delegating to `claim_period(option_name, key)`. `claim_period` uses
+`add_option()` as a first-ever-use INSERT guard, then an atomic conditional UPDATE as the
+steady-state path. After the very first daily/monthly backup, `add_option()` always returns
+false immediately (WordPress's `add_option()` performs a `get_option()` pre-check and exits
+early whenever the option has any stored value — confirmed: `wp-includes/option.php` line 1123).
+The real guard thereafter is `UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value <> %s`:
+MySQL's row-level lock on the single `wp_options` row means exactly one of two racing callers
+with the same new key sees affected-row count > 0. No further consolidation opportunity or risk.
+
+**Group B — `Job_Store::claim_alert()`.** Operates on the custom `wp_wpthistle_backup_jobs`
+table, not `wp_options`. Its idiom (`UPDATE SET alert_sent=1 WHERE job_id=%s AND alert_sent=0`)
+is a one-way boolean flip on a job row; the success signal is a changed-row count from a single
+conditional UPDATE. Nothing in common with an `add_option`-based primitive at the SQL level;
+cannot be wrapped by one. Must stay separate. Fail-closed on DB error (0 affected rows → false):
+on a DB error, the alert is missed rather than duplicated.
+
+**Group C — `Admin::claim_notify_test_throttle()`.** Uses `add_option()` as a first-ever-use
+guard (like `claim_period`) but diverges in its steady-state path. Where `claim_period` uses an
+atomic `UPDATE WHERE option_value <> $key` to succeed once per calendar period (a period-identity
+check), `claim_notify_test_throttle` uses a non-atomic `get_option` → timestamp-compare →
+`update_option` sequence to implement a 10-second TTL cooldown (a time-distance check). These
+are semantically different and require different SQL shapes. Must stay separate. See Part 2 for
+the open finding this introduces.
+
+**Failure modes across all four implementations.** `claim_period` and `claim_alert` both fail
+closed on a DB error: 0 affected rows → false → no claim. The current
+`claim_notify_test_throttle` fails open on a DB error: `get_option()` defaults to 0 on failure,
+the stale-window check always passes (now - 0 is always large), and the function returns true
+unconditionally. The proposed fix in Part 2 also fails closed: `null === $existing` returns false before any
+UPDATE is attempted (the null guard in the snippet matches before the elapsed check runs).
+
+**On a potential shared `atomic_claim(string $option_key, string $value): bool` helper.**
+WordPress's `add_option()` uses `INSERT ... ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)`
+— a real UPSERT, not INSERT-IGNORE (confirmed from source; proven live below). `claim_period`'s
+invariant holds because all concurrent callers write an identical value (same date string), so the
+DUPLICATE KEY UPDATE either changes nothing (0 affected rows without `CLIENT_FOUND_ROWS`) or is
+correctly serialized by InnoDB's row lock. A generic helper that accepted caller-supplied values
+would not preserve this identity-value invariant. `claim_period` stays where it is.
+
+**Residual: `CLIENT_FOUND_ROWS` hosting environments.** WordPress reads `MYSQL_CLIENT_FLAGS`
+if defined (confirmed: `class-wpdb.php` line 1959), defaulting to 0. If a hosting environment
+defines `MYSQL_CLIENT_FLAGS` including `MYSQLI_CLIENT_FOUND_ROWS`, the same-value DUPLICATE KEY
+UPDATE returns 1 (found rows) instead of 0, making `add_option()` return true for BOTH
+concurrent first-ever callers writing the same date key — re-opening the first-ever-call race for
+`claim_period`. Never observed in this plugin's tested environments; the steady-state
+`UPDATE WHERE !=` path is unaffected by this flag. Accepted residual risk.
+
+**H-01 attribution and class-admin.php:519 comment — corrected 2026-11-03.** H-01 was fixed by
+`GET_LOCK`/`RELEASE_LOCK` (`Job_Store::try_lock()`, `class-job-store.php:222`) — confirmed by
+T12. None of the four atomic-claim functions is the H-01 fix. T12 is correct. The stale docblock
+that said "`Job_Store::claim_today()/claim_month()/claim_alert()`... against the jobs table" sat
+directly above a second, correct docblock from the same-day CAS fix below (a leftover from that
+edit, never actually deleted) — removed outright rather than corrected in place, since the
+correct docblock immediately below it already covered the same ground accurately. The same
+mislabel in T27's LOW-N-04-RESIDUAL bullet is also corrected now.
+
+**Cleanup-on-release.** None of the four implementations ever releases or expires its claim.
+On uninstall: `claim_alert`'s state goes away with the jobs table drop. The three `wp_options`
+rows — `wpthistle_backup_daily_claim`, `wpthistle_backup_monthly_claim`, and
+`wpthistle_backup_notify_test_throttle` — are not in `uninstall.php` and are orphaned on
+removal. One concrete consequence: an uninstall followed by same-day reinstall will have a stale
+daily/monthly claim row in `wp_options` and skip that day's scheduled backup. Flagged for Holt
+as housekeeping to add to `uninstall.php` on the next pass; not a security fix and not a
+blocker.
+
+### Part 2 — LOW-N-04-RESIDUAL stale-reclaim gap (fixed 2026-11-03, see above)
+
+**Finding.** T27 documents LOW-N-04-RESIDUAL as "fixed (2.4.1)" with the atomic `add_option()`
+claim. T27's statement "a real MySQL INSERT unique on option_name, so two concurrent callers can
+never both win it" is false as a general claim about this function. The add_option() INSERT
+guard is broken for concurrent first-ever callers whose `$now` values differ by even one second
+(proven live below), and it provides zero protection in the steady-state path that runs on every
+subsequent call (also proven live below).
+
+**Mechanism — first-ever call race.** `add_option()` performs a `get_option()` pre-check before
+its INSERT: if the option has no stored value, both concurrent callers pass that check. Both then
+execute `INSERT ... ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)`. When their
+`$now` values differ (callers arrive in different seconds), `ROW_COUNT()` for the second caller
+is 2 (the duplicate-key UPDATE changed the value) — truthy — so `add_option()` returns true for
+both. Proven live on the wp-restore stack (`db-restore`, MariaDB 11.4):
+
+```
+Caller A (value='100'): INSERT ... ON DUPLICATE KEY UPDATE → ROW_COUNT() = 1  [inserted, wins]
+Caller B (value='101'): INSERT ... ON DUPLICATE KEY UPDATE → ROW_COUNT() = 2  [UPSERT, also wins]
+```
+
+Both callers return true; both fire test notifications. (Same-second callers — same value — are
+safe: ROW_COUNT() = 0 → returns false → goes to stale branch. Only callers crossing a second
+boundary during the first-ever concurrent window are affected.)
+
+**Mechanism — steady-state race (runs on every call after the first).** Once the throttle option
+has any stored value, `add_option()`'s pre-check fires immediately and returns false before
+reaching the INSERT. Every subsequent call lands in the stale-reclaim branch:
+
+```php
+$existing = (int) get_option( self::NOTIFY_TEST_THROTTLE_KEY, 0 );
+if ( $now - $existing < self::NOTIFY_TEST_THROTTLE_SECONDS ) {
+    return false;
+}
+update_option( self::NOTIFY_TEST_THROTTLE_KEY, $now, 'no' );
+return true;
+```
+
+This is a plain check-then-act with no conditional WHERE clause on the UPDATE. Two concurrent
+callers both arriving more than 10 seconds after the last test notification both read the same
+stale `$existing`, both pass the elapsed check, and both call `update_option()` unconditionally.
+Both return true; both fire test notifications.
+
+**Write-side SQL proof (deterministic).** On the wp-restore stack (`db-restore`, MariaDB 11.4):
+
+```sql
+-- Setup: option_value = '100' (stale).
+-- Caller A: UPDATE wp_options SET option_value='300' WHERE option_name=KEY → ROW_COUNT() = 1 [wins]
+-- Caller B: UPDATE wp_options SET option_value='301' WHERE option_name=KEY → ROW_COUNT() = 1 [also wins]
+-- Final stored value: '301'   ← both callers returned true
+```
+
+**Live end-to-end proof (barrier-synchronized WP-CLI, wp-restore container, 2026-11-03).**
+Option set to a stale value. 12 `wp eval-file` processes launched concurrently; each sleeps
+until a shared barrier timestamp (barrier = container clock + 60 s), then invokes
+`claim_notify_test_throttle()` via `ReflectionMethod::setAccessible`. Result: **6 WINs out of
+12** — confirming that a parallel burst of admin test-notification requests within the same
+second lets multiple callers through per 10-second window.
+
+**Why this is not the residual the T27 audit accepted.** T27 accepted the stale-reclaim race
+on the stated premise that it was "bounded to once per window rather than ongoing abuse." That
+acceptance was predicated on the `add_option()` guard providing atomic protection for the
+common case. The uninstall.php audit shows nothing ever deletes the throttle option: the only
+references in the entire codebase are the constant definition and this function's own use of it.
+After the first ever test notification, `add_option()` returns false immediately on every call.
+In steady state — which begins after the very first button click and lasts until plugin removal —
+the function is identical in behavior to the pre-2.4.1 `get_transient`/`set_transient` version,
+one unbounded burst per window, with the 2.4.1 fix doing nothing.
+
+**Persistent object cache: correctness requirement on the fix.** `get_option()` goes through the
+WP object cache (Redis, Memcached if installed). The raw `$wpdb->get_var()` SELECT in the fix
+bypasses the cache and always reflects the actual DB row. If `$existing` were read via
+`get_option()` instead, the compare-and-swap `WHERE option_value = $existing` could never match
+after a cache miss refreshes with the row's current (already-claimed) value — permanently locking
+out the button under any persistent-cache setup. The direct SELECT is not an optimization; it is
+a correctness requirement.
+
+**Proof of fix.** Replacing the unconditional UPDATE with `UPDATE WHERE option_value = $existing`
+(compare-and-swap) correctly serializes concurrent callers. SQL proof on the same stack:
+
+```sql
+-- Setup: option_value = '100' (stale).
+-- Caller A: UPDATE ... WHERE option_value='100' → ROW_COUNT() = 1 [wins, stored='300']
+-- Caller B: UPDATE ... WHERE option_value='100' → ROW_COUNT() = 0 [loses, stored unchanged]
+-- Final stored value: '300'   ← only caller A returned true
+```
+
+**Live end-to-end proof of fix (same harness, 2026-11-03).** Fixed function body run inline via
+the same 12-process barrier harness. Result: **1 WIN out of 12** — exactly one test notification
+dispatched per window.
+
+**Impact.** LOW. Requires `manage_options` + a valid nonce. Impact is bounded to third-party
+notification-service quota burn (Pushover: 10,000 messages/month per token). No credential
+exposure, no data integrity risk, no privilege escalation.
+
+**Severity: LOW. Status: OPEN — fix proposed below, pending the owner's approval before Holt
+implements.**
+
+**Proposed fix for `Admin::claim_notify_test_throttle()` in `class-admin.php`.** Replace the
+entire function body with the following. The first-ever-use guard switches from `add_option()`
+(which is a UPSERT under the hood and has its own first-ever-call race) to a raw `INSERT IGNORE`
+that is a true no-op on duplicate. The stale-reclaim branch uses a direct `$wpdb->get_var()`
+read (bypasses the object cache) and an atomic compare-and-swap UPDATE. The WHERE clause
+compares against the raw `$existing` string, not `(string)(int)$existing`, so a non-canonical
+value already in the row still matches and doesn't permanently lock out the button:
+
+```php
+private static function claim_notify_test_throttle(): bool {
+    global $wpdb;
+    $now = time();
+    // First-ever claim: INSERT IGNORE is a true no-op on duplicate (unlike add_option()'s
+    // UPSERT, which returns truthy for a second caller whose $now differs by even 1 second).
+    if ( $wpdb->query( $wpdb->prepare(
+        "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+        self::NOTIFY_TEST_THROTTLE_KEY,
+        (string) $now
+    ) ) > 0 ) {
+        return true;
+    }
+    // Steady-state: compare-and-swap. Read directly from DB (not get_option(), which
+    // goes through the object cache) so the WHERE clause is never stale under a persistent
+    // cache layer. Only the caller whose UPDATE finds option_value still equal to $existing
+    // wins; the other gets 0 affected rows and returns false.
+    $existing = $wpdb->get_var( $wpdb->prepare(
+        "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+        self::NOTIFY_TEST_THROTTLE_KEY
+    ) );
+    if ( null === $existing || $now - (int) $existing < self::NOTIFY_TEST_THROTTLE_SECONDS ) {
+        return false;
+    }
+    return $wpdb->query( $wpdb->prepare(
+        "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s",
+        (string) $now,
+        self::NOTIFY_TEST_THROTTLE_KEY,
+        $existing
+    ) ) > 0;
+}
+```
+
+**Fail-closed properties of the fix.** A DB error on the INSERT IGNORE returns 0 → falls
+through to the stale-reclaim path. A DB error on the SELECT returns null → `null === $existing`
+→ returns false. A DB error on the UPDATE returns false/0 → returns false. All failure modes
+deny the claim rather than granting it.
+
+**Fixed and verified, 2026-11-03 (the owner approved: "move ahead with Vex's updates").**
+`php -l` clean, 253/253 unit tests, E2E Case J (sequential: immediate repeat rejected, then
+passes after cooldown) passes. New E2E parallel-burst case added
+(`tests/fixtures/notify-throttle-claim.php` + `run-e2e-notifications.sh`, 12 genuinely
+concurrent calls via separate OS processes synchronized on a shared barrier timestamp, not a
+curl burst, since HTTP/process scheduling jitter could serialize requests enough to never
+exercise the race at all) — asserts exactly 1 of 12 wins. Verified this case actually catches
+the bug, not just a test that trivially passes: temporarily reinstated the old buggy
+`add_option()`-only version, re-ran, got 6/12 wins (matching Vex's own live proof above exactly),
+then reverted to the real fix and confirmed back to exactly 1/12. Also closed the
+"Cleanup-on-release" housekeeping gap noted below: `uninstall.php` now deletes
+`wpthistle_backup_daily_claim`/`wpthistle_backup_monthly_claim`/`wpthistle_backup_notify_test_throttle`.
+T27's LOW-N-04-RESIDUAL bullet and this entry's OPEN marker are both cleared — see T27 above.
+
+## T29 — Notification enrichment: HTML email, per-channel icon/image fields, and secret-field UI fix
+
+Vex security audit, SOP-023, 2026-11-03, scoped to three pieces of work shipped together:
+(1) `build_alert_text()`/`build_test_text()` now returning `job_context()` fields; `build_email_html()` with inline-styled HTML body and `htmlspecialchars()` escaping; HTML `Content-Type` header for email; per-channel `$extra` arrays carrying `icon_url`/`ok`/`is_test`; Telegram `sendPhoto` path; Gotify `extras.client::notification.bigImageUrl`; ntfy `icon` field; Slack Block Kit image accessory; Discord embed thumbnail; Pushover `url`/`url_title`; `build_webhook_request()` new `plugin`/`icon_url` fields.
+(2) Secret-field UI fix (`clear_secret_checkbox()` stable `<span>` anchor; `data-empty-hint` attribute; `syncSecretFieldUi()` JS post-AJAX-save DOM update).
+(3) LOW-N-04-RESIDUAL real fix (`Admin::claim_notify_test_throttle()` compare-and-swap via direct `$wpdb` queries); `uninstall.php` cleanup; stale docblock removal.
+
+**XSS — email HTML body.** `build_email_html()` uses a closure `$e()` wrapping `htmlspecialchars(ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8')` on every interpolated value: `plugin_name` (hardcoded constant), `site_name` (from `wp_specialchars_decode(get_option('blogname'))`, decoded to raw chars before escaping), `result_label` (hardcoded translation string), `backup_id`/`finished`/`error` (from job metadata), `manage_url` (from `admin_url()`, WP-generated), `logo_url` (from `WPTHISTLE_BACKUP_URL` constant + hardcoded filename). The `$ok_color` inline style value is derived purely from booleans selecting among three hardcoded hex strings — not user-influenced. No unescaped user-controlled value reaches the HTML output. **CLEAR.**
+
+**SSRF — icon_url/photo/image_url fields.** `icon_url()` and `wordmark_url()` are computed from `WPTHISTLE_BACKUP_URL + 'assets/images/logo-icon-color.png'` / `logo-wordmark-color.png`. `WPTHISTLE_BACKUP_URL` is a plugin constant set at activation from `plugin_dir_url(__FILE__)` — not reachable by any attacker-controlled input. Both asset files (`logo-icon-color.png`, `logo-wordmark-color.png`) confirmed present in `assets/images/`. Third-party services (Telegram, Slack, Discord, ntfy, Gotify) fetch the icon from this URL server-side; since the URL always points to this plugin's own public asset path, no SSRF surface is introduced. **CLEAR.**
+
+**Secret-field credential in DOM.** All 10 secret/password inputs always render `value=""` server-side (confirmed by diff and by the existing T10/LOW-N-03 audit). `data-empty-hint` and `placeholder` carry display-only hint strings, never credential values. `syncSecretFieldUi()` reads `input.getAttribute('data-empty-hint')` or the two JS string constants (`SAVED_PLACEHOLDER_TEXT`/`CLEAR_LABEL_TEXT`) set via `wp_json_encode(__(...))` — developer-controlled translation strings, never credential values. **CLEAR for DOM exposure.** One gap found and fixed below (LOW-V-05).
+
+**New Content-Type: text/html email header.** `wp_mail()` with this header passes through PHPMailer, which sanitizes headers. The header value is a hardcoded string literal, not user-influenced. **CLEAR.**
+
+**Telegram `sendPhoto` / Gotify `extras` / ntfy `icon`.** All carry the plugin's own public icon URL (not user-controlled). No new unauthenticated or less-authenticated surface. ntfy and Gotify simply pass the URL as a JSON field; if the image is unreachable the notification still delivers. For Telegram and Slack, unreachable images introduce a new silent delivery failure (see LOW-V-04 below). **CLEAR for auth/SSRF; LOW finding below.**
+
+**Four LOW findings; all fixed same-day.**
+
+- **LOW-V-01, `htmlspecialchars()` returns empty string on invalid UTF-8 without ENT_SUBSTITUTE.**
+  `htmlspecialchars($s, ENT_QUOTES, 'UTF-8')` returns `''` when `$s` contains a byte invalid in UTF-8 (e.g. `"\xff"` from a filesystem error message on a non-UTF-8 host, or a network response). This fails safe for XSS (no HTML injection), but silently drops the entire Error row value in the email body, leaving the admin with a blank "Error:" cell on a failure alert. The correct escaping behavior is to substitute the Unicode replacement character (U+FFFD) for the invalid byte and preserve the rest. Fixed: `ENT_QUOTES | ENT_SUBSTITUTE` throughout `build_email_html()`'s `$e()` closure. New unit test `test_build_email_html_invalid_utf8_in_error_message_does_not_drop_error_cell` proves the valid ASCII portions of a message containing `"\xff"` survive into the HTML body.
+
+- **LOW-V-02, `truncate()` used byte-length functions, splitting multibyte characters.**
+  `strlen()`/`substr()` are byte operations. For a string where the truncation point (e.g. `max_length - 3`) falls in the middle of a multibyte UTF-8 character, `substr()` returns a byte sequence ending with the orphaned lead byte of that character — invalid UTF-8. For the Telegram `sendPhoto` path specifically, the caption is form-encoded (not JSON), so the invalid byte reaches Telegram's API as-is and returns 400, delivering nothing. For JSON-encoded channels, `wp_json_encode()` would have substituted the Unicode replacement character, but mb_substr is strictly more correct. Fixed: `truncate()` now uses `mb_strlen()/mb_substr()` throughout. New unit test `test_truncate_multibyte_does_not_split_a_multibyte_character` builds a string where the byte-based cut would land mid-character and asserts the result is valid UTF-8.
+
+- **LOW-V-03, Slack block section text had no independent length cap.**
+  Slack documents a 3000-character limit for the `text` field inside a section block. The blocks text was set to the same full (mrkdwn-escaped) title+message string as the top-level `text` field, with no separate truncation. Exceeding 3000 characters causes Slack to return `invalid_blocks` and reject the ENTIRE message — including the plain top-level `text` fallback that the pre-existing tests assert as a delivery floor. A failure notification with a long error message (stack trace, long path, verbose OS error) would silently fail to deliver on sites with Slack enabled and icon-enriched notifications active. Fixed: the block `text` is independently truncated to 3000 characters before including it in the blocks array. The top-level `text` field is unaffected. New unit test `test_build_slack_request_with_icon_block_text_is_capped_at_3000_chars`.
+
+- **LOW-V-04, no delivery fallback for Telegram `sendPhoto` or Slack blocks on a non-2xx response.**
+  Telegram's `sendPhoto` endpoint requires Telegram's own servers to fetch the image URL. On sites not publicly reachable (behind Cloudflare bot protection, Basic Auth, a private LAN, or a Cloudflare-protected asset path), Telegram returns 400 — `sendMessage` to the same bot+chat would have worked. Similarly, even with LOW-V-03's truncation in place, Slack blocks can still be rejected if the `image_url` itself is unreachable at Slack's validation time, dropping the entire message. Before this change, neither channel had any enriched path; this regression would have made delivery silently worse than the pre-change baseline on some sites. Fixed: `send_to_channel()` now retries without `$extra` for both `slack` and `telegram` on a non-2xx first response, restoring the proven pre-change behavior as a floor. Discord, ntfy, and Gotify do not need this fallback: Discord delivers the message even if the thumbnail is unreachable (it shows a broken thumbnail), and ntfy/Gotify treat `icon` as a purely cosmetic extra that doesn't affect delivery.
+
+- **LOW-V-05, `captureSavedValues()` ran before `syncSecretFieldUi()` cleared `input.value`.**
+  `captureSavedValues()` snapshots `el.value` for every field in `settingsFieldIds`, which includes all 10 password-type credential inputs. In the save-success handler, `captureSavedValues()` was called before `syncSecretFieldUi()`. If a user typed a new credential value and saved it, `input.value` still held the plaintext credential when `captureSavedValues()` ran, persisting it in `lastSavedValues`. When the user subsequently triggered an unsaved-changes revert on a different tab, `revertToLastSaved()` wrote the plaintext credential back into the DOM input field — exposing the value in the browser. Fixed by swapping the call order: `syncSecretFieldUi()` now runs before `captureSavedValues()`, so the snapshot only ever captures `''` for secret fields (since `syncSecretFieldUi()` clears `input.value` for every just-saved and just-cleared field). No new network call, no server-side change. Verified by code inspection; not covered by an automated test (a Playwright test would be needed to exercise a full browser DOM sequence, out of scope here).
+
+**Verdict: CLEAR TO SHIP.** No CRITICAL or HIGH findings. Five LOWs, all fixed. `php -l` clean on all touched files. 256/256 unit tests (3 new). All 12 `run-e2e-notifications.sh` cases pass, including the T28 parallel-burst case confirming the LOW-N-04-RESIDUAL CAS fix holds.
 
 ## Residual risks accepted for MVP, with owner-visible documentation
 

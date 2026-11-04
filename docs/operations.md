@@ -443,7 +443,7 @@ directly), file changes are staged then applied with anything they'd
 replace moved into a timestamped rollback directory first (nothing
 ever deleted outright), and the final `restore_swap` step is a single
 atomic multi-table `RENAME TABLE` — live tables preserved under a
-`wpgbak…` prefix, shadow tables promoted to live. A failure at or
+`wtbak…` prefix, shadow tables promoted to live. A failure at or
 after this point leaves clearly-labeled recovery artifacts rather
 than attempting automatic rollback, which would be its own large
 source of new bugs — the job log names the exact rollback table

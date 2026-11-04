@@ -4,7 +4,7 @@
  * Plugin URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Update URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Description:       Creates recoverable backups of this WordPress site (files + database) and transfers them to a user-controlled Nextcloud, ownCloud, or OpenCloud server over authenticated HTTPS WebDAV -- or packages them straight to your browser with zero cloud dependency. Manual or scheduled backups, retention pruning, and one-click in-place restore from either a configured server destination or an uploaded backup bundle.
- * Version:           2.4.1
+ * Version:           2.5.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            WPThistle project
@@ -57,7 +57,7 @@ define( 'WPTHISTLE_BACKUP_RESTORE_BOOTSTRAPPED', __FILE__ );
 // still fatals with "Cannot redeclare function ...".
 if ( true ) {
 
-define( 'WPTHISTLE_BACKUP_VERSION', '2.4.1' );
+define( 'WPTHISTLE_BACKUP_VERSION', '2.5.0' );
 // Phase 2 (incremental backups): bumped 1 -> 2. Every manifest this
 // plugin writes from here on -- full or incremental alike -- carries
 // new backup_mode/base_backup_id/parent_backup_id/files fields.
@@ -277,7 +277,7 @@ function migrate_from_legacy_wpguard(): void {
 }
 
 /**
- * the security audit delta audit, 2026-10-20 (OBS-1): register_activation_hook() only
+ * Delta security audit, 2026-10-20 (OBS-1): register_activation_hook() only
  * fires on a fresh activation, not on a plugin update while already
  * active -- a site upgrading in place would silently lose the hourly
  * safety-net cron (the create_job()-triggered reap path still works
@@ -514,9 +514,9 @@ function boot() {
 
 	add_action( 'wpthistle_backup_cron_advance', __NAMESPACE__ . '\\cron_advance' );
 
-	// Phase 5 (self-chaining job advance, SECURITY: not yet audited --
-	// see cron_advance()/self_chain_advance()'s docblocks): deliberately
-	// also registered _nopriv_ -- the request this answers is a
+	// Phase 5 (self-chaining job advance, Vex-audited 2026-11-01, see
+	// self_chain_advance()'s own docblock for the finding detail):
+	// deliberately also registered _nopriv_ -- the request this answers is a
 	// background loopback this site fires at itself, never a logged-in
 	// browser request, so it carries no WP auth cookie at all. Security
 	// here is entirely the per-job advance_token (hash_equals()-checked

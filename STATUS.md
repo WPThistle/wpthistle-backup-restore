@@ -1,5 +1,131 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## Unreleased (not yet tagged) — Notifications tab: secret-field "Saved"/"Clear" UI now updates live after AJAX save, 2026-11-03
+
+the owner's report: he'd saved real credentials for Discord/Slack/Pushover/
+Telegram, but the "Clear saved value" checkbox and "Saved (leave blank to
+keep)" placeholder (LOW-N-03, shipped 2.4.1) never appeared -- until he
+navigated away from the Notifications tab and back. `Settings::save_secret_field()`
+was always correct server-side; the bug was purely that `clear_secret_checkbox()`/
+`secret_field_placeholder()` only ever run once, at the page's initial
+server-side render -- Save Settings is AJAX, so nothing told the DOM a
+field just went from empty to saved (or saved to cleared) without a full
+reload re-running that PHP.
+
+Fixed: `clear_secret_checkbox()` now always renders a stable
+`<span id="{field}_clear_wrap">` (empty or with the checkbox inside,
+instead of sometimes emitting nothing at all), each of the 10 secret
+`<input>`s gained a `data-empty-hint` attribute carrying its own
+placeholder text, and a new `syncSecretFieldUi()` (JS) runs right after
+every successful Save Settings call to update whichever fields actually
+changed this round -- cleared fields revert to their empty hint and lose
+the checkbox, newly-saved fields get the "Saved" placeholder and gain a
+freshly-built checkbox (with its own `change` listener re-attached, since
+`innerHTML` replacement drops the old one). Cosmetic/UI-state only, no new
+AJAX endpoint, no new credential-handling code path -- no Vex audit
+needed. Confirmed live via a headless-browser pass (Playwright) against
+the real stack: typed-value save -> placeholder+checkbox appear with no
+reload; clear-checkbox save -> both revert, also with no reload. 253/253
+unit tests unaffected (this is pure admin-page JS/template, not covered by
+the unit suite).
+
+## Unreleased (not yet tagged) — Notification identification + rich formatting, LOW-N-04-RESIDUAL real fix, 2026-11-03
+
+Not yet tagged/released -- owner's explicit instruction this round. Two
+independent pieces of work, both verified, neither shipped yet.
+
+**Notification identification + rich formatting** (owner's request: "nothing
+says WPThistle... is it possible to include the plugin and site in the
+Subject line, as well as the logo/wordmark in the body"). `Notifications`
+class reworked:
+
+- `build_alert_text()`/`build_test_text()` now also return every
+  `job_context()` field (`plugin_name`, `site_name`, `ok`, `is_test`,
+  `result_label`, `backup_id`, `finished`, `error`, `manage_url`,
+  `email_subject`) alongside the existing `title`/`message`, additively --
+  no existing key removed or changed, so every pre-existing caller/test is
+  unaffected. The plain-text `message` body also gained `Plugin: WPThistle
+  Backup and Restore` / `Site: ...` lines, visible on every text channel.
+- **Email**: now the only channel with a real subject line + HTML body.
+  Subject format `[WPThistle] {site}: {result}` (owner's chosen format, e.g.
+  `[WPThistle] example.com: Scheduled backup succeeded`). Body is
+  `build_email_html()`: the wordmark image (`logo-wordmark-color.png`, same
+  public-URL pattern the admin menu icon and update-feed icon already use --
+  not a new exposure) plus an inline-styled details table (Plugin, Site,
+  Result, Backup ID, Finished, Error-if-any) and a Manage-this-plugin button.
+  Every interpolated value escaped with plain `htmlspecialchars()`, not
+  `esc_html()`, so the builder stays unit-testable with zero WP-shim
+  dependency.
+- **Discord/Slack/ntfy/Gotify/Telegram**: each builder gained an optional
+  trailing `$extra` array, default `array()` -- omitting it reproduces the
+  exact prior request shape byte-for-byte (every pre-existing unit test
+  calls these with no `$extra` and still passes unchanged). When given,
+  Discord gets a color-coded embed with the plugin icon as a thumbnail;
+  Slack gets a Block Kit image accessory (the plain `text` fallback stays
+  present either way); ntfy gets its documented `icon` field; Gotify gets
+  its documented `extras['client::notification']['bigImageUrl']`; Telegram
+  switches from `sendMessage` to `sendPhoto` (icon by URL, Telegram fetches
+  it server-side, no file upload from this plugin) with the text as a
+  caption, truncated to Telegram's shorter 1024-char caption limit rather
+  than its message limit.
+- **Pushover**: deliberately NOT given an inline image. Pushover's only
+  image mechanisms are `attachment_base64` (reading and base64-encoding a
+  local file) or a multipart file upload -- both new disk/encoding surface
+  in a class that currently does zero disk I/O. Given `url`/`url_title`
+  (a clickable link to the settings page) instead; the inline-image path is
+  flagged as a real follow-up, not built blind under time pressure.
+- **Pushbullet**: text-only, no API image field for a simple "note" push;
+  relies on the shared `Plugin: .../Site: ...` message lines above.
+- **Webhook**: gained `plugin` (the display name) and `icon_url` (new
+  optional 4th param, default `''`) fields in the existing structured JSON.
+  Additive only -- `schema_version` stays 1.
+- 19 new unit tests (`NotificationsTest.php`, 253/253 total), each
+  default-vs-`$extra` pair explicitly asserting the no-`$extra` path is
+  byte-identical to before. Full `tests/e2e/run-e2e-notifications.sh`
+  battery (11 cases) re-run clean against the live disposable stack after
+  the change, including a real captured email and a real Discord HTTP POST.
+- **Not yet done**: no Vex security pass on this specific diff. No new
+  credential/auth surface was touched (same secrets, same channels, same
+  `send_request()`), but it's new code generating URLs/HTML from job data,
+  so a pass before tagging is still warranted per this project's own
+  discipline, not skipped out of expedience.
+
+**LOW-N-04-RESIDUAL, actually fixed this time.** Vex's 2026-11-03 re-audit
+(see docs/threat-model.md T28) found the 2.4.1 "fix" below wasn't atomic
+past the very first call ever made -- `add_option()`'s own `get_option()`
+pre-check skips the INSERT path forever after the option has any stored
+value, so every call after the first real test-notification click fell
+through to a plain read-compare-write with no atomicity, the exact TOCTOU
+shape 2.4.1 was supposed to close. Proven live: 6 of 12 concurrent calls won
+a race that should allow exactly 1. Fixed per Vex's exact proposed shape:
+`Admin::claim_notify_test_throttle()` now does a real compare-and-swap via
+direct `$wpdb` queries (`INSERT IGNORE` as the one-time claim, `UPDATE ...
+WHERE option_value = $existing` as the steady-state claim), reading the
+compare value directly from `$wpdb` rather than `get_option()` so a
+persistent object-cache layer can't serve a stale read and permanently lock
+the button out. 253/253 unit tests, `php -l` clean. **Parallel-burst E2E regression case
+added** (`tests/fixtures/notify-throttle-claim.php`, barrier-synchronized
+across genuinely separate OS processes, not a curl burst): asserts exactly
+1 of 12 truly concurrent calls wins. Verified the test actually catches the
+bug, not just a test that trivially passes -- temporarily reinstated the
+old buggy version, re-ran, got 6/12 wins (matching Vex's own live proof
+exactly), reverted, confirmed back to 1/12. Also closed the
+"Cleanup-on-release" housekeeping gap T28 flagged: `uninstall.php` now
+deletes the three atomic-claim options so a same-day reinstall doesn't
+inherit a stale claim.
+
+Also found and fixed along the way: a 4-way `add_option()`-claim
+duplication Holt flagged during the full codebase review below turned out,
+on Vex's inspection, to be three genuinely different mechanisms (`wp_options`
+period-identity claim, a DB-table-row claim, and this TTL claim) that
+should NOT be consolidated into one shared helper -- doing so would be a
+real foot-gun. Also corrected a standing docblock mislabel: H-01 (T12) was
+actually fixed via `GET_LOCK`/`RELEASE_LOCK`, not the `add_option()` idiom.
+T27's citation and a stale duplicate docblock in `class-admin.php` (a
+leftover from the same-day CAS edit, sitting directly above the correct
+one) both overstated `add_option()`'s role -- the stale docblock removed
+outright, T27 corrected.
+
 ## Unreleased (not yet tagged) — Notifications hardening: credential clear + test-endpoint rate limit, 2026-11-02
 
 Closes the two LOW findings accepted (not fixed) in the 2.4.0 entry
@@ -24,7 +150,11 @@ no new Vex audit scope beyond re-checking these two specific changes.
   concurrent requests could both slip through before either wrote it;
   now an atomic `add_option()` claim, same idiom
   `Job_Store::claim_today()`/`claim_month()`/`claim_alert()` already
-  use); INFO-N-03 (the 10 new `_clear` flags were read with `! empty()`,
+  use). **Reopened 2026-11-03 (T28): `add_option()`'s guard is not
+  fully atomic even on first call, and is bypassed entirely after the
+  first use; the stale-reclaim branch has the same TOCTOU as the
+  original transient approach. Fix proposed in threat-model T28,
+  pending the owner's approval.** INFO-N-03 (the 10 new `_clear` flags were read with `! empty()`,
   which would treat a future JS refactor's literal string `"false"` as
   truthy and silently clear every credential -- now a strict `'1' ===`
   check).

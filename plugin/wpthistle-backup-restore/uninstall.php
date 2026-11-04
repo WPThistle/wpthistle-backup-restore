@@ -11,6 +11,16 @@ delete_option( 'wpthistle_backup_db_schema_version' );
 delete_option( 'wpthistle_backup_chain_state' );
 delete_option( 'wpthistle_backup_retention_last_error' );
 
+// Vex security audit (2026-11-03, T28 "Cleanup-on-release" finding): none
+// of the three atomic-claim options below ever expires or gets deleted in
+// normal operation -- leaving them here on uninstall meant a same-day
+// reinstall would inherit a stale claim and silently skip that day's/
+// month's scheduled backup, or stay rate-limited, for no reason a fresh
+// install would expect.
+delete_option( 'wpthistle_backup_daily_claim' );
+delete_option( 'wpthistle_backup_monthly_claim' );
+delete_option( 'wpthistle_backup_notify_test_throttle' );
+
 // Vex security audit (2026-10-23, non-blocking LOW): a site migrated
 // from the pre-2.0.0 plugin (migrate_from_legacy_wpguard()) left these
 // legacy-named rows in place deliberately, non-destructively. If this
@@ -25,6 +35,10 @@ delete_option( 'wpguard_nc_db_schema_version' );
 delete_option( 'wpguard_nc_chain_state' );
 delete_option( 'wpguard_nc_retention_last_error' );
 
+// Duplicated from Job_Store::table_name() rather than calling it: WP loads
+// this file standalone on uninstall, without the main plugin file, so the
+// class autoloader (registered there) was never set up -- Job_Store doesn't
+// exist in this request at all.
 $table = $wpdb->prefix . 'wpthistle_backup_jobs';
 $wpdb->query( "DROP TABLE IF EXISTS `{$table}`" ); // phpcs:ignore -- table name is a hardcoded constant prefix, not user input.
 

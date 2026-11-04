@@ -46,7 +46,10 @@ class Backup_Chain {
 
 	// Generous relative to realistic file counts (~150-250 bytes of
 	// JSON per file-index entry); matches the PART_SIZE_BYTES order of
-	// magnitude used elsewhere as "large but bounded."
+	// magnitude used elsewhere as "large but bounded." Shared with
+	// Retention::referenced_source_backups(), which reads the same
+	// manifest.json shape for the same reason -- kept in one place
+	// rather than two copies of the same literal.
 	const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
 
 	private static function get_state(): ?array {

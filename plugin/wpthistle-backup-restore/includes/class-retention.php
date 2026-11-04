@@ -58,7 +58,7 @@ class Retention {
 	 * to any particular site/backups path here) so this can be pointed
 	 * at an isolated folder in tests without touching real backups.
 	 *
-	 * the security audit delta audit, 2026-10-20 (RETENTION-2): a folder only counts
+	 * the delta security audit, 2026-10-20 (RETENTION-2): a folder only counts
 	 * as a real backup -- for the keep-N count, and as a deletion
 	 * candidate -- if its name matches the backup_id format AND it has
 	 * a COMPLETE.json (same completion signal step_finalize() itself
@@ -310,10 +310,6 @@ class Retention {
 		return array( 'deleted' => $deleted, 'kept' => count( $verified ) - count( $deleted ) );
 	}
 
-	// Generous relative to realistic file counts; matches
-	// Backup_Chain::MAX_MANIFEST_BYTES.
-	const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
-
 	/**
 	 * @return array<string>|\WP_Error Distinct backup_ids (excluding
 	 *   $backup_id itself) that $backup_id's own manifest.json's `files`
@@ -321,7 +317,7 @@ class Retention {
 	 *   points at itself.
 	 */
 	private static function referenced_source_backups( Nextcloud_Client $client, string $parent_rel, string $backup_id ) {
-		$manifest = $client->get_json( $parent_rel . '/' . $backup_id . '/manifest.json', self::MAX_MANIFEST_BYTES );
+		$manifest = $client->get_json( $parent_rel . '/' . $backup_id . '/manifest.json', Backup_Chain::MAX_MANIFEST_BYTES );
 		if ( is_wp_error( $manifest ) ) {
 			return $manifest;
 		}

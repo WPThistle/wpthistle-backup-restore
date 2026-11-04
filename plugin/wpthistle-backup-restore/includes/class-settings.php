@@ -712,14 +712,6 @@ class Settings {
 	}
 
 	/**
-	 * Strips any line defining the app-password or CA-bundle constants
-	 * (ADR 0002's escape hatch) out of wp-config.php content before it is
-	 * archived (security audit finding H-02) — a backup that depends on the
-	 * credential protecting it must not also contain that credential.
-	 * Pure string transform, no I/O, so the orchestrator handles reading
-	 * the real file and writing the redacted copy to the job's tmp dir.
-	 */
-	/**
 	 * Matches one full PHP single- or double-quoted string literal
 	 * (escape-aware), for use as define()'s second argument in a
 	 * redaction regex.
@@ -747,6 +739,14 @@ class Settings {
 REGEX;
 	}
 
+	/**
+	 * Strips any line defining the app-password or CA-bundle constants
+	 * (ADR 0002's escape hatch) out of wp-config.php content before it is
+	 * archived (security audit finding H-02) — a backup that depends on the
+	 * credential protecting it must not also contain that credential.
+	 * Pure string transform, no I/O, so the orchestrator handles reading
+	 * the real file and writing the redacted copy to the job's tmp dir.
+	 */
 	public static function redact_wp_config_contents( string $content ): string {
 		// 2.0.0 rename: must cover every constant name
 		// active_app_pw_const()/active_ca_bundle_const() can read, not
