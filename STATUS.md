@@ -1,5 +1,108 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## 2.7.0 (release candidate) — Dedicated Migrate tab; symmetric idempotency guard fix, 2026-11-04
+
+the owner's instruction: migration already works (the existing "this backup
+is from a different site" checkbox), but is buried as one checkbox
+inside the ordinary Restore section, and the safety guard behind it had
+never been checked in both directions. Build a dedicated Migrate tab
+that exposes the capability clearly, with explicit non-goals (this is a
+one-time domain move, same credentials, NOT a staging<->production sync
+tool), and fix whatever's actually broken along the way. Explicitly
+**stop at a release candidate** -- no tag, no GitHub release -- until
+the owner reviews.
+
+- **Scoped with an advisor consult before writing any code.** Two
+  candidate gaps had been raised in conversation (an ABSPATH/absolute-
+  filesystem-path rewrite, and a subdirectory-migration refusal).
+  Investigating both BEFORE building:
+  - The "can't migrate into a subdirectory" framing was simply wrong --
+    a cross-DOMAIN move landing in a subdirectory already worked and
+    was never refused (different hosts can never replay-match each
+    other). Proved live with a throwaway probe, confirmed with new
+    unit tests, no code change needed for that specific case.
+  - ABSPATH rewriting was dropped entirely: no evidence in this
+    project's own fixtures or docs that it's actually needed within the
+    stated scope (same credentials, only the domain changes), and
+    building it speculatively would mean a manifest `format_version`
+    bump plus a fragile new path-boundary regex for an unverified
+    benefit. Flagged to the owner rather than built on a guess.
+  - A real, separate bug WAS found instead while probing: `DB_Migrator`'s
+    MEDIUM-MIG-2 subdirectory-extension guard only ever checked ONE
+    direction. See below.
+  - A bonus finding (WordPress's `wp_json_encode()`/`json_encode()`
+    escaping `/` to `\/` by default, meaning a URL cached inside a raw
+    JSON blob wouldn't be matched by the current engine) was flagged to
+    the owner as a candidate for a FUTURE round, not built into this one --
+    deliberately avoiding repeating the earlier scope-creep pattern
+    (the notification hub, then the ABSPATH idea) now that "do what we
+    do well, not everything" is the explicit standing principle.
+- **MEDIUM-MIG-3: the MEDIUM-MIG-2 guard was only one-directional.**
+  It refused a new URL extending the old one with a path/query segment
+  on the same host (`example.com` -> `example.com/wordpress`), but not
+  the reverse -- migrating OUT of a subdirectory on the same host
+  (`example.com/wordpress` -> `example.com`) is exactly as unsafe to
+  replay on a crash/stale-checkpoint resume. Proved live (by both Holt
+  and, independently, Vex): a value containing
+  `.../wordpress/wordpress/hello` correctly becomes `.../wordpress/hello`
+  in one pass, but replaying that same row from a stale checkpoint
+  strips a second, legitimate `/wordpress` segment that was never part
+  of the old home URL. Fixed: the guard now checks both directions.
+  Cross-domain-into-subdirectory remains correctly allowed throughout.
+- **LOW-MIG-2 (found by Vex during audit, fixed same-day): the guard's
+  boundary set was narrower than the matcher's own boundary set.** The
+  actual matching regex treats any non-alphanumeric/hyphen/colon/
+  underscore character as a valid boundary, not just `/` and `?` --
+  proved live with `https://example.com` -> `https://example.com#extra`
+  slipping past the old guard, unsafe for the same reason. Not reachable
+  through any real WordPress `home_url` (always a clean
+  `scheme://host/path`), so rated LOW. Fixed by sharing one constant
+  (`URL_BOUNDARY_LOOKAHEAD`) between the matcher and the guard so the
+  two can't drift apart again, replacing the old `strpos()`-based check
+  with a `preg_match()` against that same pattern.
+- **Two pre-existing unit tests had weaker assertions than they looked
+  (caught by Vex, tightened same-day):** `! is_wp_error(...)` and
+  `! empty(...)` each individually also pass for the WRONG outcome (an
+  empty no-op array; a non-empty WP_Error object) -- the same
+  silent-wrong-result shape NEW-HIGH-1 already caught once in this
+  function. Both now assert the real shape (`is_array() && !empty()`).
+- **New Migrate tab** in the admin UI: explains the domain-move promise
+  and explicit non-goals, a 3-step walkthrough, and one button that
+  jumps to the Home tab's existing Restore section with the migration
+  checkbox pre-armed. Pure informational/navigational addition -- no
+  new AJAX handler, no new nonce, reuses the existing (now
+  correctness-hardened) restore flow entirely.
+- **Vera QA pass (SOP-024) on the new tab: PASS**, with one MEDIUM and
+  one LOW, both fixed same-day:
+  - F-01 (MEDIUM): the migrate shortcut's pre-armed checkbox stayed
+    silently checked if the admin wandered off to a different tab
+    without completing the restore. Fixed: switching to any tab other
+    than Home now clears the checkbox (staying on or returning to Home
+    doesn't undo an active in-progress choice). Re-verified live with a
+    Playwright script after the fix (not just unit-reasoned).
+  - F-02 (LOW, WCAG AAA): the shortcut's scroll-to-confirm-field ignored
+    `prefers-reduced-motion`. Fixed: checks the media query, uses
+    `instant` instead of `smooth` when set. Re-verified live.
+- **Vex security audit (SOP-023, T31 in docs/threat-model.md): CLEAR TO
+  SHIP.** MEDIUM-MIG-3 and LOW-MIG-2 both re-verified/found-and-fixed as
+  above; new Migrate tab independently confirmed to add no new attack
+  surface (static-text-only rendering, no new handler, the button is
+  functionally equivalent to a human clicking the pre-existing
+  checkbox).
+- **Regression:** 262/262 unit tests (4 new this round). Full
+  `tests/e2e/run-e2e-restore-migration.sh` and
+  `tests/e2e/run-e2e-restore.sh` re-run clean after every fix, not just
+  once at the end.
+- **Docs:** `docs/operations.md`'s Phase 2.5 section and
+  `docs/threat-model.md` (new T31) both updated; `readme.txt` FAQ on
+  cross-domain restore expanded with the explicit non-goals and the
+  corrected subdirectory behavior; `readme.txt` changelog entry added.
+  Plugin version bumped to 2.7.0 (header + `WPTHISTLE_BACKUP_VERSION`).
+- **Stopping here, as instructed.** Committed and pushed to `main` so
+  CI runs and the work is durable, but **no `v2.7.0` tag and no GitHub
+  Release yet** -- the owner asked to review the release candidate before
+  that step.
+
 ## 2.6.0 — Pushover inline icon, two test-infra fixes, a frozen CHANGELOG.md, 2026-11-04
 
 Owner's instruction this round: work through four previously-flagged

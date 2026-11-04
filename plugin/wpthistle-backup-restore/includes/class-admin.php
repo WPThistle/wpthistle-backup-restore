@@ -1000,6 +1000,7 @@ class Admin {
 
 			<h2 class="nav-tab-wrapper" id="wpthistle_backup_tabs">
 				<a href="#" class="nav-tab nav-tab-active" data-tab="home"><?php esc_html_e( 'Home', 'wpthistle-backup-restore' ); ?></a>
+				<a href="#" class="nav-tab" data-tab="migrate"><?php esc_html_e( 'Migrate', 'wpthistle-backup-restore' ); ?></a>
 				<a href="#" class="nav-tab" data-tab="connection"><?php esc_html_e( 'Connection', 'wpthistle-backup-restore' ); ?></a>
 				<a href="#" class="nav-tab" data-tab="schedule"><?php esc_html_e( 'Backup Schedule', 'wpthistle-backup-restore' ); ?></a>
 				<a href="#" class="nav-tab" data-tab="notifications"><?php esc_html_e( 'Notifications', 'wpthistle-backup-restore' ); ?></a>
@@ -1060,6 +1061,19 @@ class Admin {
 				);
 				?>
 			</p>
+			</div>
+			<div id="wpthistle_backup_tab_migrate" class="wpthistle-backup-tab-panel" style="display:none;">
+			<h2><?php esc_html_e( 'Migrate to a new domain', 'wpthistle-backup-restore' ); ?></h2>
+			<p class="description"><?php esc_html_e( 'A simple, same-site domain move: take a backup already made on the OLD site, then restore it here, on the NEW site. Every URL in the backup (post content, widget settings, and everywhere else WordPress stores one) is rewritten to this site\'s own domain before anything is restored live. Everything else -- content, users, credentials, settings -- carries over exactly as it was.', 'wpthistle-backup-restore' ); ?></p>
+			<div class="notice notice-info inline" style="margin:0 0 16px;padding:8px 12px;">
+				<p style="margin:0.5em 0;"><strong><?php esc_html_e( 'What this is not:', 'wpthistle-backup-restore' ); ?></strong> <?php esc_html_e( 'this is a one-time domain move, not a staging <-> production sync tool. It does not support the source and target having different credentials, does not merge or preserve the target\'s own settings, and overwrites this site\'s content and database in place -- the same full restore the Home tab performs, just with URL rewriting confirmed.', 'wpthistle-backup-restore' ); ?></p>
+			</div>
+			<ol>
+				<li><?php esc_html_e( 'On the OLD site, open WPThistle Backup and Restore -> Home and take a backup (or use one already taken).', 'wpthistle-backup-restore' ); ?></li>
+				<li><?php esc_html_e( 'Install WPThistle Backup and Restore fresh on the NEW domain, and connect it to the same cloud storage (or have the backup .zip ready to upload).', 'wpthistle-backup-restore' ); ?></li>
+				<li><?php esc_html_e( 'Come back here, on the NEW site, and click the button below -- it jumps to the Home tab\'s Restore section with the migration box already checked.', 'wpthistle-backup-restore' ); ?></li>
+			</ol>
+			<p><button type="button" class="button button-primary" id="wpthistle_backup_migrate_go"><?php esc_html_e( 'Start migration in Restore', 'wpthistle-backup-restore' ); ?></button></p>
 			</div>
 			<div id="wpthistle_backup_tab_connection" class="wpthistle-backup-tab-panel" style="display:none;">
 			<h2><?php esc_html_e( 'Connection', 'wpthistle-backup-restore' ); ?></h2>
@@ -1548,6 +1562,7 @@ class Admin {
 			var tabLinks = document.querySelectorAll('#wpthistle_backup_tabs .nav-tab');
 			var tabPanels = {
 				home: document.getElementById('wpthistle_backup_tab_home'),
+				migrate: document.getElementById('wpthistle_backup_tab_migrate'),
 				connection: document.getElementById('wpthistle_backup_tab_connection'),
 				schedule: document.getElementById('wpthistle_backup_tab_schedule'),
 				notifications: document.getElementById('wpthistle_backup_tab_notifications'),
@@ -1563,6 +1578,23 @@ class Admin {
 						revertToLastSaved();
 					}
 					settingsDirty = false;
+					// Vera QA F-01, 2026-11-04: the Migrate tab's shortcut
+					// pre-arms the URL-mismatch checkbox below, which stayed
+					// silently checked if the admin then wandered off to a
+					// DIFFERENT tab without completing the restore -- a stale
+					// armed state they'd have no reason to expect on a later
+					// return to Home. Clearing it on every away-navigation
+					// (not on Home itself, so staying on or returning to Home
+					// to actually use it doesn't get undone by this) keeps the
+					// checkbox only ever reflecting a choice the admin is
+					// actively making right now.
+					if ( 'home' !== link.dataset.tab ) {
+						var confirmUrlBox = document.getElementById('wpthistle_backup_restore_confirm_url');
+						if ( confirmUrlBox.checked ) {
+							confirmUrlBox.checked = false;
+							confirmUrlBox.dispatchEvent(new Event('change'));
+						}
+					}
 					Array.prototype.forEach.call(tabLinks, function(l){ l.classList.remove('nav-tab-active'); });
 					link.classList.add('nav-tab-active');
 					Object.keys(tabPanels).forEach(function(key){ tabPanels[key].style.display = 'none'; });
@@ -1901,6 +1933,22 @@ class Admin {
 				document.getElementById('wpthistle_backup_restore_start').disabled = !confirmed;
 			}
 			document.getElementById('wpthistle_backup_restore_confirm_text').addEventListener('input', updateRestoreButtonState);
+
+			document.getElementById('wpthistle_backup_migrate_go').addEventListener('click', function(){
+				var confirmUrlBox = document.getElementById('wpthistle_backup_restore_confirm_url');
+				confirmUrlBox.checked = true;
+				confirmUrlBox.dispatchEvent(new Event('change'));
+				Array.prototype.forEach.call(tabLinks, function(l){ l.classList.remove('nav-tab-active'); });
+				var homeLink = document.querySelector('#wpthistle_backup_tabs .nav-tab[data-tab="home"]');
+				if (homeLink) { homeLink.classList.add('nav-tab-active'); }
+				Object.keys(tabPanels).forEach(function(key){ tabPanels[key].style.display = 'none'; });
+				tabPanels.home.style.display = '';
+				// Vera QA F-02, 2026-11-04: honor prefers-reduced-motion
+				// rather than always animating this scroll.
+				var noMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+				document.getElementById('wpthistle_backup_restore_confirm_text').scrollIntoView( { behavior: noMotion ? 'instant' : 'smooth', block: 'center' } );
+				document.getElementById('wpthistle_backup_restore_confirm_text').focus();
+			});
 
 			document.getElementById('wpthistle_backup_restore_start').addEventListener('click', function(){
 				var source = selectedRestoreSource();

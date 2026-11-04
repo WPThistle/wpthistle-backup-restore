@@ -547,6 +547,35 @@ backup from the owner's own production site (not a synthetic
 fixture), restored in place onto a disposable WordPress install with
 the plugin genuinely active and running on it.
 
+**The subdirectory-extension guard above (MEDIUM-MIG-2) was only ever
+checked in one direction, 2026-11-04.** It refused a new URL that
+extends the old one with a further path/query segment on the same
+host (`https://example.com` -> `https://example.com/wordpress`), but
+not the reverse: moving OUT of a subdirectory on the same host
+(`https://example.com/wordpress` -> `https://example.com`) is exactly
+as unsafe to replay, proved live with a throwaway probe against the
+real class -- a value containing
+`https://example.com/wordpress/wordpress/hello` correctly becomes
+`https://example.com/wordpress/hello` in one pass, but replaying that
+same row from a stale/crashed checkpoint (which reads back the
+already-migrated value) matches the old pattern again at its new
+start and strips a second, legitimate `/wordpress` segment that was
+never part of the old home URL at all. The guard is now symmetric:
+either direction of same-host path/query extension is refused. A
+**different**-host move into a subdirectory (the actual migration
+case this plugin supports -- moving to a new domain that happens to
+land in a subdirectory) was never affected and remains allowed, since
+two different hosts can never replay-match each other's output.
+Re-verified by Vex alongside this fix, who also caught one more: the
+guard only ever recognized `/` and `?` as a real boundary, while the
+matcher it guards (`str_replace_pairs()`) treats ANY non-alphanumeric/
+hyphen/colon/underscore character as one too -- not reachable through
+a real WordPress `home_url` (always a clean `scheme://host/path`), but
+fixed anyway by sharing one constant (`URL_BOUNDARY_LOOKAHEAD`) between
+the matcher and the guard so the two can't drift apart again. See
+`docs/threat-model.md` T31 for both findings in full (MEDIUM-MIG-3,
+LOW-MIG-2).
+
 **security audit round (findings fixed before ship):** the first build
 (commit `6a652d2`) came back BLOCKED. Fixes, briefly:
 - The path-exclusion check above now normalizes a path (splitting on

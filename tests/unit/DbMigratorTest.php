@@ -141,7 +141,61 @@ function test_replace_pairs_for_refuses_subdirectory_migration_pair() {
 }
 
 function test_replace_pairs_for_allows_ordinary_different_domain_migration() {
-	wpguard_assert( ! empty( DB_Migrator::replace_pairs_for( 'https://old.example', 'https://new.example' ) ), 'an ordinary different-domain migration (the whole point of this feature) must still produce real pairs' );
+	// Security audit: `! empty()` alone also passes for a non-empty
+	// WP_Error object -- the exact "silent wrong outcome" class
+	// NEW-HIGH-1 already caught once in this function. Assert the
+	// real shape (an array of pairs), not just "non-empty".
+	$pairs = DB_Migrator::replace_pairs_for( 'https://old.example', 'https://new.example' );
+	wpguard_assert( is_array( $pairs ) && ! empty( $pairs ), 'an ordinary different-domain migration (the whole point of this feature) must still produce real pairs, not a WP_Error' );
+}
+
+function test_replace_pairs_for_allows_cross_domain_migration_into_a_subdirectory() {
+	// The MEDIUM-MIG-2 refusal only ever applied to a path/query
+	// extension on the SAME host -- a different host can never match
+	// its own first pass's output (the host differs at the very
+	// start), so this is safe to replay and must not be refused, even
+	// though the new URL does extend the old one with a path.
+	//
+	// Security audit: `! is_wp_error()` alone also passes for an empty
+	// array -- the exact "silent no-op instead of a real migration"
+	// class NEW-HIGH-1 already caught once in this function. Assert
+	// the real shape (an array of real pairs), not just "not an error".
+	$pairs = DB_Migrator::replace_pairs_for( 'https://old.example', 'https://new.example/blog' );
+	wpguard_assert( is_array( $pairs ) && ! empty( $pairs ), 'a different-domain migration landing in a subdirectory must not be refused -- only a same-host path/query extension is unsafe to replay' );
+}
+
+function test_replace_pairs_for_refuses_non_slash_boundary_extension() {
+	// Security audit LOW-MIG-2: the guard originally only recognized
+	// `/` and `?` as a "real" boundary, but str_replace_pairs()'s own
+	// matching regex treats ANY non-alphanumeric/hyphen/colon/
+	// underscore character as one too -- proved live that
+	// "https://example.com" -> "https://example.com#extra" slipped
+	// past the old guard unrefused, yet a second pass matches its own
+	// first pass's output right at the "#" boundary and appends
+	// "#extra" again, just like the "/" case MEDIUM-MIG-2/3 already
+	// cover. The guard must be at least as strict as the matcher it
+	// guards, not merely as strict as the one shape needed so far.
+	wpguard_assert(
+		is_wp_error( DB_Migrator::replace_pairs_for( 'https://example.com', 'https://example.com#extra' ) ),
+		'a new URL that extends the old one with a non-slash, non-domain-continuation boundary character (e.g. "#") must also be refused -- the guard must match every boundary str_replace_pairs() itself treats as real'
+	);
+}
+
+function test_replace_pairs_for_refuses_subdirectory_migration_pair_in_reverse() {
+	// Found 2026-11-04, scoping the migration-tab work: the original
+	// MEDIUM-MIG-2 guard only checked the forward direction (new
+	// extends old). The same hazard exists moving OUT of a
+	// subdirectory on the same host -- proved live: a value
+	// containing "https://example.com/wordpress/wordpress" correctly
+	// becomes "https://example.com/wordpress" in one pass, but
+	// replaying that same row from a stale checkpoint (which reads
+	// back the already-migrated value) matches the old pattern again
+	// at its new start and strips a second, legitimate "/wordpress"
+	// segment that was never part of the old home URL.
+	wpguard_assert(
+		is_wp_error( DB_Migrator::replace_pairs_for( 'https://example.com/wordpress', 'https://example.com' ) ),
+		'a new URL that the OLD URL extends with a further path segment must also be refused -- the guard must be symmetric'
+	);
 }
 
 function test_replace_pairs_for_allows_scheme_only_migration() {
@@ -312,6 +366,9 @@ return array(
 	'test_replace_in_scalar_incomplete_class_object_does_not_crash',
 	'test_replace_pairs_for_refuses_subdirectory_migration_pair',
 	'test_replace_pairs_for_allows_ordinary_different_domain_migration',
+	'test_replace_pairs_for_allows_cross_domain_migration_into_a_subdirectory',
+	'test_replace_pairs_for_refuses_subdirectory_migration_pair_in_reverse',
+	'test_replace_pairs_for_refuses_non_slash_boundary_extension',
 	'test_replace_pairs_for_allows_scheme_only_migration',
 	'test_replace_pairs_for_allows_port_addition',
 	'test_replace_pairs_for_allows_longer_unrelated_hostname',

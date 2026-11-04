@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.6.0
+Stable tag: 2.7.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -86,7 +86,9 @@ There's no one-click undo, but nothing a restore replaces is ever deleted outrig
 
 = Can I restore a backup onto a different domain, e.g. to migrate my site? =
 
-Yes. Check "this backup is from a different site" when restoring, and every URL stored anywhere in the backup (post content, widget settings, serialized data, everywhere WordPress stores a URL) is rewritten to the new site's own address before anything goes live, so logging into the migrated site actually works afterward.
+Yes -- there's a dedicated Migrate tab that walks through it. Take a backup on the old site, then on the new domain check "this backup is from a different site" when restoring, and every URL stored anywhere in the backup (post content, widget settings, serialized data, everywhere WordPress stores a URL) is rewritten to the new site's own address before anything goes live, so logging into the migrated site actually works afterward.
+
+This is a one-time domain move, not a staging &lt;-&gt; production sync tool. It does not support the source and target having different credentials, and it does not merge or preserve the target site's own settings -- it's the same full restore described above, just with URL rewriting confirmed. If the new domain lands in a subdirectory (e.g. `example.com` to `example.com/blog`) that's supported too; moving between two paths on the *same* host (no domain change at all) is refused outright rather than risk a partial migration, since that specific shape isn't safe to retry if a restore is interrupted partway through.
 
 = How do I know a backup actually succeeded? =
 
@@ -187,6 +189,13 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.7.0 =
+Added a dedicated Migrate tab that walks through moving this site to a new domain, step by step, and makes clear what it is and isn't: a one-time domain move (not a staging &lt;-&gt; production sync tool), with the same credentials and settings carried over exactly, only the domain changing.
+
+Fixed a real gap in the safety check behind that feature: migrating OUT of a subdirectory on the same host (e.g. `example.com/old-install` back to `example.com`) wasn't being refused the way migrating INTO one already was, even though it's exactly as unsafe to retry if a restore is ever interrupted partway through. A different-domain move that happens to land in a subdirectory (the actual supported migration case) was never affected and still works.
+
+Reviewed by a security audit before release: the fix above, re-verified correct; one additional low-severity hardening found and fixed the same day (a narrower edge case in the same safety check, not reachable through any normal WordPress site). No findings on the new tab itself.
 
 = 2.6.0 =
 Pushover notifications now show the WPThistle icon too, the same as Discord, Slack, ntfy, Gotify, and Telegram already did -- it just needed a different delivery mechanism (Pushover has no URL-based image option) rather than being a platform limitation as the 2.5.0 note below said. If Pushover ever rejects the icon-enriched message, the notification automatically retries without the icon rather than being lost.

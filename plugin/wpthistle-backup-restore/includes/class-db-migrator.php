@@ -40,6 +40,24 @@ class DB_Migrator {
 	const BATCH_SIZE = 200;
 	const TEXT_DATA_TYPES = array( 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext' );
 
+	// Security audit LOW-MIG-2: shared by str_replace_pairs()'s own
+	// matching regex and by replace_pairs_for()'s extends_forward/
+	// extends_backward idempotency guard below, so the two can never
+	// drift apart again. They had: the guard only treated `/` and `?`
+	// as a "real" boundary, while the matcher's lookahead here already
+	// treats ANY non-alphanumeric/hyphen/colon/underscore character (a
+	// bare `#`, `~`, `@`, `;`, URL-encoded space, etc.) as one too --
+	// proved live that a same-host pair like `https://example.com` ->
+	// `https://example.com#extra` slipped past the guard unrefused, yet
+	// is exactly as unsafe to replay (a second pass matches its own
+	// first pass's output at the `#` boundary and appends `#extra`
+	// again). Not a real-world WordPress `home_url` shape (always a
+	// clean scheme://host/path from `wp_options.siteurl`), but the
+	// guard's job is to be AT LEAST as strict as the matcher it's
+	// guarding, not merely as strict as the one shape (`/`, `?`) this
+	// class has needed so far.
+	const URL_BOUNDARY_LOOKAHEAD = '(?![a-zA-Z0-9\-:_])(?!\.[a-zA-Z0-9])';
+
 	/** @return array{0:string,1:string}[]|\WP_Error Search/replace pairs to apply, longest first, or a WP_Error if a pair would be unsafe to apply (see below). */
 	public static function replace_pairs_for( string $old_home_url, string $new_home_url ) {
 		$old_home_url = rtrim( $old_home_url, '/' );
@@ -89,10 +107,34 @@ class DB_Migrator {
 			// boundary-aware regex in str_replace_pairs() already
 			// prevents a second pass from matching its own first pass's
 			// output in every one of those shapes.
-			if ( '' !== $pair[0] && ( 0 === strpos( $pair[1], $pair[0] . '/' ) || 0 === strpos( $pair[1], $pair[0] . '?' ) ) ) {
+			//
+			// Found 2026-11-04, scoping the migration-tab work: this check
+			// was only ever one-directional. The SAME hazard exists in
+			// reverse -- migrating OUT of a subdirectory on the same host
+			// (https://example.com/wordpress -> https://example.com) --
+			// and was not refused. Proved live: a value containing
+			// "https://example.com/wordpress/wordpress" (an ordinary page
+			// whose own real path happens to start with the same segment
+			// as the old home path) correctly becomes
+			// "https://example.com/wordpress" in one pass, but a
+			// crash-before-checkpoint-persist replay of that same row
+			// reads back the ALREADY-migrated value and matches the old
+			// pattern again at its new start, silently stripping a second,
+			// legitimate "/wordpress" segment that was never part of the
+			// old home URL at all. Same unsafe-to-replay shape as
+			// MEDIUM-MIG-2, just the other direction -- the guard must be
+			// symmetric. Flagged to Vex for re-verification of MEDIUM-MIG-2
+			// alongside this fix.
+			$extends_forward  = '' !== $pair[0] && strlen( $pair[1] ) > strlen( $pair[0] )
+				&& 1 === preg_match( '/^' . preg_quote( $pair[0], '/' ) . self::URL_BOUNDARY_LOOKAHEAD . '/', $pair[1] );
+			$extends_backward = '' !== $pair[1] && strlen( $pair[0] ) > strlen( $pair[1] )
+				&& 1 === preg_match( '/^' . preg_quote( $pair[1], '/' ) . self::URL_BOUNDARY_LOOKAHEAD . '/', $pair[0] );
+			if ( $extends_forward || $extends_backward ) {
+				$longer  = $extends_forward ? $pair[1] : $pair[0];
+				$shorter = $extends_forward ? $pair[0] : $pair[1];
 				return new \WP_Error(
 					'wpthistle_backup_migrate_unsafe_pair',
-					"Migrating to {$pair[1]} from {$pair[0]} would extend the old URL with a path this replacement can't safely repeat if a restore batch is ever retried (e.g. moving into a subdirectory). Refusing to migrate URLs for this restore rather than risk corrupting them on a retry."
+					"Migrating between {$pair[0]} and {$pair[1]} would make one URL continue the other with a further path/query segment ({$longer} extends {$shorter}) -- this replacement can't safely repeat if a restore batch is ever retried (e.g. moving into or out of a subdirectory). Refusing to migrate URLs for this restore rather than risk corrupting them on a retry."
 				);
 			}
 			$pairs[] = $pair;
@@ -342,7 +384,7 @@ class DB_Migrator {
 			// alphanumeric after it, since that's an ordinary
 			// sentence-ending period on a URL at the end of a sentence,
 			// not a longer domain, and must still match.
-			$replaced = preg_replace( '/' . preg_quote( $pair[0], '/' ) . '(?![a-zA-Z0-9\-:_])(?!\.[a-zA-Z0-9])/', $pair[1], $value );
+			$replaced = preg_replace( '/' . preg_quote( $pair[0], '/' ) . self::URL_BOUNDARY_LOOKAHEAD . '/', $pair[1], $value );
 			// preg_replace() can return null on a PCRE-level failure
 			// (e.g. hitting the backtrack limit on a very large value) --
 			// keep the value as it stood rather than let a null silently
