@@ -2,58 +2,70 @@
 
 ## Release cadence
 
-No public release has happened yet (MVP, local-test only). Once/if public
-release happens, intended cadence: patch releases as needed, review the
-version matrix (ADR 0008) monthly.
+Public since 1.0.0 (2026-10-20); nine releases through 2.7.0 as of this
+writing. Cadence in practice: a release per feature/fix round, not a fixed
+calendar schedule — each one gated on its own independent security audit
+(Vex) clearing, not on elapsed time. Review the version support matrix
+(`docs/adr/0008-version-support-matrix.md`) periodically, and whenever a
+WordPress/PHP/Nextcloud compatibility break surfaces.
 
 ## Upstream compatibility monitoring
 
-`.github/workflows/ci.yml` includes a weekly scheduled run (cron) intended
-to catch upstream WordPress/PHP/Nextcloud breakage even when plugin code
-hasn't changed — **not yet exercised**, no CI runner connected this
-session. Until CI is connected, this must be done manually: periodically
-re-run `docker/scripts/bootstrap.ps1` + `run-e2e.ps1` against updated image
-tags.
+`.github/workflows/ci.yml` runs a weekly scheduled job (`cron: '0 6 * * 1'`,
+MNT-14) to catch upstream WordPress/PHP/Nextcloud breakage even when plugin
+code hasn't changed. Connected and executing since 1.3.0 (confirmed via
+`gh run list`) — no longer manual. The `multi-backend` profile (ownCloud,
+OpenCloud) is not part of this automated matrix and still needs a manual
+`run-e2e.sh`/`run-e2e-multi-backend.sh` pass when those backends' own
+compatibility is in question.
 
 ## Dependency updates
 
-None to monitor yet — MVP ships zero Composer dependencies
-(`docs/architecture.md` explains why). If Phase 2+ adds any, wire up
-Dependabot/Renovate at that point, not before (MNT-13).
+Still none to monitor — the plugin ships zero Composer dependencies by
+design (`docs/architecture.md` explains why). Revisit Dependabot/Renovate
+only if that changes (MNT-13).
 
 ## Backup-format compatibility
 
-Any change to `docs/backup-format.md`'s schema requires a `format_version`
-bump and an entry here describing what changed and how old archives remain
-readable. Nothing to record yet — only `format_version: 1` has ever
-existed.
+`format_version` has bumped twice: 1 -> 2 (1.1.0, incremental file backups)
+and is still 2 as of 2.7.0 — the 2.7.0 Migrate tab is a restore-time UI
+addition over the existing migration mechanism, not a manifest schema
+change. Any future schema change requires a `format_version` bump and an
+entry here describing what changed and how older archives remain
+readable, per MNT-04.
 
 ## Manifest migrations
 
-None yet (first version). When they're needed: a migration must be able to
-read every prior `format_version` the plugin ever produced, per MNT-04.
+None needed yet beyond the 1 -> 2 bump above — both versions are still
+read by current restore code (`docs/backup-format.md`'s compatibility
+policy).
 
 ## Restore regression gates
 
-`tests/e2e/run-e2e.sh` is the regression gate: any change must still pass
-a full backup -> download -> restore -> content-assertion cycle before
-merge, per MNT-16/MNT-19.
+`tests/e2e/run-e2e.sh` (ordinary restore), `run-e2e-restore-migration.sh`
+(cross-domain URL migration, including the symmetric idempotency-guard
+coverage added in 2.7.0), and `tests/unit/run-all.php` (262 tests as of
+2.7.0) are the regression gates: any change must pass a full backup ->
+download -> restore -> content-assertion cycle, plus the full unit suite,
+before merge, per MNT-16/MNT-19.
 
 ## Deprecation policy
 
-Not written yet — nothing has shipped publicly to deprecate. Will be
-added before any `format_version` bump or public 1.0.
+Not written yet — nothing shipped under this plugin's current
+(`wpthistle-backup-restore`) identity has been deprecated. The 2.0.0
+rename itself is the one precedent: the old `WPGuard Nextcloud Backup`
+plugin/slug/constants are kept working as a documented fallback rather
+than deprecated outright — see `docs/releasing.md`'s cutover section.
 
 ## Credential rotation
 
 Admin replaces the app password field (blank = unchanged, non-blank =
 replace) without resetting destination, job history, or existing backups
-— implemented in `class-settings.php`'s save validation and tested
-implicitly by the admin UI's "leave blank to keep current value" behavior.
-Formal rotation test (save new password mid-job-history, confirm old
-backups still listed/accessible) is a Phase 2 MNT-18 item, not yet
-automated.
+— implemented in `class-settings.php`'s save validation. Formal rotation
+test (save new password mid-job-history, confirm old backups still
+listed/accessible) remains a backlog item (MNT-18), not yet automated.
 
 ## Emergency fixes
 
-None issued yet (0.1.0 is the first version).
+None issued out-of-band yet — every fix to date has gone through the
+normal audit-and-release cycle documented in `STATUS.md`/`CHANGELOG.md`.
