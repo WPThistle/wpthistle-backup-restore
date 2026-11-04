@@ -8,12 +8,19 @@
 # exact same failure, and each of the two "when" toggles must be
 # respected independently. Email is proven fully end-to-end here.
 # Discord stands in as the one third-party channel proven fully live
-# (real HTTP dispatch, real request shape); the other 7 channels'
+# (real HTTP dispatch, real request shape); the other channels'
 # exact request shapes are already exhaustively unit-tested
 # (tests/unit/NotificationsTest.php), and share the identical
 # send_request() dispatch code path Discord's own live proof here
 # already exercises, so a second/third/.../eighth live mock would be
-# testing the same mechanism again, not new risk.
+# testing the same mechanism again, not new risk. Pushover is the one
+# exception (Case L, below): its icon support reads a real file off
+# disk (Notifications::icon_attachment()), new surface this suite's
+# shim-based unit tests can't reach (the unit shim's WPTHISTLE_BACKUP_DIR
+# deliberately points at a path with no real file behind it, so
+# icon_attachment() degrades to "no icon" there by design) -- Case L
+# proves the real disk read and base64 encoding against the actual
+# bundled asset, not just the pure request-shape function.
 #
 # Runs against wp-restore (port 8082), never wp-source. Other suites
 # depend on wp-source as a stable fixture, and this test mints its own
@@ -66,6 +73,24 @@ trap cleanup EXIT
 echo "=== Setup: fresh WordPress + plugin on wp-restore ==="
 docker compose -p wpguard-test exec -T db-restore mariadb -u root -p"$WP_RESTORE_DB_ROOT_PASSWORD" \
   -e "DROP DATABASE IF EXISTS wp_restore; CREATE DATABASE wp_restore; GRANT ALL ON wp_restore.* TO 'wp_restore'@'%';" > /dev/null
+
+# This script talks to wp-restore over real HTTP (curl against the
+# persistent apache container on port 8082), not just through the
+# wpcli container's own per-invocation prefix -- that apache container
+# bakes WORDPRESS_TABLE_PREFIX into its live process env at creation
+# time, so it silently keeps whatever a DIFFERENT E2E script (e.g.
+# run-e2e-multi-backend.sh) last left it at unless this recreates it to
+# match $PREFIX first. Same self-healing pattern run-e2e-restore.sh
+# already uses. Found live: this script failed with "could not extract
+# nonce from settings page" immediately after a multi-backend run left
+# wp-restore on "wps_" while this script's own tables use "wp_" --
+# WordPress bootstrapped against the wrong prefix sees itself as not
+# installed, returning an effectively empty page.
+if ! grep -q "^WP_RESTORE_TABLE_PREFIX=${PREFIX}$" .env; then
+  sed -i "s/^WP_RESTORE_TABLE_PREFIX=.*/WP_RESTORE_TABLE_PREFIX=${PREFIX}/" .env
+  MSYS_NO_PATHCONV=1 docker compose -p wpguard-test --env-file .env up -d --force-recreate wp-restore > /dev/null
+fi
+
 docker exec wpguard-test-wp-restore-1 sh -c "
   find /var/www/html/wp-content/plugins -mindepth 1 -maxdepth 1 ! -name wpthistle-backup-restore -exec rm -rf {} +
   rm -rf /var/www/html/wp-content/uploads/*
@@ -105,7 +130,7 @@ add_filter( 'pre_http_request', function ( $preempt, $args, $url ) {
 	// Only intercept what this test cares about. The real Nextcloud
 	// WebDAV/OCS calls this same job also makes must still actually
 	// happen, or the backup itself would never reach a terminal state.
-	if ( false === strpos( $url, 'discord.com' ) ) {
+	if ( false === strpos( $url, 'discord.com' ) && false === strpos( $url, 'pushover.net' ) ) {
 		return $preempt;
 	}
 	$captured = get_option( 'wpthistle_test_captured_http', array() );
@@ -115,6 +140,21 @@ add_filter( 'pre_http_request', function ( $preempt, $args, $url ) {
 		'body'    => $args['body'] ?? '',
 	);
 	update_option( 'wpthistle_test_captured_http', $captured, false );
+	// Vex LOW-V-06 (2026-11-04): if this plugin's test toggle is on AND
+	// this specific request carries an attachment, simulate Pushover
+	// rejecting the icon-enriched request -- proves the real fallback
+	// retry (Notifications::send_to_channel()'s 'pushover' case) actually
+	// fires and still delivers, not just that the code reads correctly.
+	$body = $args['body'] ?? array();
+	if ( get_option( 'wpthistle_test_reject_attachment', false ) && is_array( $body ) && ! empty( $body['attachment_base64'] ) ) {
+		return array(
+			'headers'  => array(),
+			'body'     => '',
+			'response' => array( 'code' => 400, 'message' => 'Bad Request' ),
+			'cookies'  => array(),
+			'filename' => null,
+		);
+	}
 	return array(
 		'headers'  => array(),
 		'body'     => '',
@@ -174,11 +214,23 @@ echo "=== Case B: the SAME failure via a MANUAL (AJAX) backup must send NO alert
 reset_captured
 COOKIES="/tmp/alert-email-cookies.txt"
 rm -f "$COOKIES"
-curl -s -c "$COOKIES" "$BASE_URL/wp-login.php" -o /dev/null
+# `|| true` on both: on at least this host, `curl -o /dev/null`
+# intermittently exits nonzero (CURLE_WRITE_ERROR) even on a normal
+# response -- a local git-bash/MSYS `/dev/null` quirk, not a real
+# request failure (same root cause fixed in run-e2e-multi-backend.sh).
+# Neither call's own exit code was ever a real login-success check
+# anyway (curl doesn't fail on a non-2xx status without -f); the actual
+# login verification is the NONCE extraction immediately below, which
+# this must not be allowed to mask under `set -e`. This is almost
+# certainly the real cause behind this project's long-standing,
+# previously-unexplained "could not extract nonce from settings page"
+# flakiness on reruns -- an intermittent abort here, silently, before
+# the login ever completed.
+curl -s -c "$COOKIES" "$BASE_URL/wp-login.php" -o /dev/null || true
 curl -s -c "$COOKIES" -b "$COOKIES" \
   --data-urlencode "log=$ADMIN_USER" --data-urlencode "pwd=$ADMIN_PASS" \
   -d "wp-submit=Log+In&redirect_to=$BASE_URL%2Fwp-admin%2F&testcookie=1" \
-  "$BASE_URL/wp-login.php" -o /dev/null
+  "$BASE_URL/wp-login.php" -o /dev/null || true
 PAGE=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
 NONCE=$(echo "$PAGE" | sed -n 's/.*var nonce = "\([a-f0-9]*\)".*/\1/p')
 [ -n "$NONCE" ] || { echo "FAIL: could not extract nonce from settings page"; exit 1; }
@@ -394,6 +446,59 @@ echo "$SAVE_WITH_CLEAR" | grep -q '"success":true' || { echo "FAIL: the clear-fl
 AFTER_CLEAR=$(wpr eval "echo \WPThistle\BackupRestore\Settings::get_all()['notify_discord_webhook_url'];")
 [ "$AFTER_CLEAR" = "" ] || { echo "FAIL: the clear flag must blank the saved webhook URL via the real Save Settings endpoint, got '$AFTER_CLEAR'"; exit 1; }
 echo "OK  the clear flag blanks a previously saved notification credential via the real Save Settings endpoint"
+
+echo
+echo "=== Case L (2026-11-04 Pushover inline image): a real dispatch reads the real bundled icon off disk and base64-encodes it correctly ==="
+sleep 11 # clear the test-notification cooldown claimed by Case J's burst test, same pattern as Case J's own "once 10s passes" step
+reset_captured
+wpr eval "
+  \$s = \WPThistle\BackupRestore\Settings::get_all();
+  \$s['notify_pushover_enabled'] = true;
+  \$s['notify_pushover_user_key'] = 'u-fake-key';
+  \$s['notify_pushover_api_token'] = 't-fake-token';
+  update_option('wpthistle_backup_settings', \$s);
+" > /dev/null
+PAGE5=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
+NONCE5=$(echo "$PAGE5" | sed -n 's/.*var nonce = "\([a-f0-9]*\)".*/\1/p')
+[ -n "$NONCE5" ] || { echo "FAIL: could not extract nonce for the Pushover icon-attachment case"; exit 1; }
+TEST_RESULT_L=$(curl -s -c "$COOKIES" -b "$COOKIES" -d "action=wpthistle_backup_notify_test&nonce=$NONCE5" "$BASE_URL/wp-admin/admin-ajax.php")
+echo "$TEST_RESULT_L" | grep -qi 'Pushover: OK' || { echo "FAIL: test result must report Pushover: OK. Response: $TEST_RESULT_L"; exit 1; }
+ATTACHMENT_CHECK=$(wpr eval "
+  \$all = get_option( 'wpthistle_test_captured_http', array() );
+  \$po = null;
+  foreach ( \$all as \$c ) { if ( false !== strpos( \$c['url'], 'pushover.net' ) ) { \$po = \$c; } }
+  if ( ! \$po ) { echo 'NO_PUSHOVER_CAPTURED'; exit; }
+  \$body = \$po['body'];
+  if ( ! isset( \$body['attachment_base64'] ) ) { echo 'NO_ATTACHMENT_FIELD'; exit; }
+  if ( 'image/png' !== \$body['attachment_type'] ) { echo 'WRONG_MIME'; exit; }
+  \$decoded = base64_decode( \$body['attachment_base64'] );
+  \$real = file_get_contents( WPTHISTLE_BACKUP_DIR . 'assets/images/logo-icon-color.png' );
+  echo ( \$decoded === \$real ) ? 'MATCH' : 'MISMATCH';
+")
+[ "$ATTACHMENT_CHECK" = "MATCH" ] || { echo "FAIL: Pushover's attachment_base64 must decode to exactly the real bundled icon file's bytes, got '$ATTACHMENT_CHECK'"; exit 1; }
+echo "OK  Pushover's live dispatch reads the real bundled icon off disk and base64-encodes it correctly (attachment_base64/attachment_type both verified byte-for-byte)"
+
+echo
+echo "=== Case M (Vex LOW-V-06): if Pushover rejects the icon-enriched request, the fallback retry without it still delivers ==="
+sleep 11 # clear the test-notification cooldown
+reset_captured
+wpr eval "update_option('wpthistle_test_reject_attachment', true);" > /dev/null
+PAGE6=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
+NONCE6=$(echo "$PAGE6" | sed -n 's/.*var nonce = "\([a-f0-9]*\)".*/\1/p')
+[ -n "$NONCE6" ] || { echo "FAIL: could not extract nonce for the Pushover fallback case"; exit 1; }
+TEST_RESULT_M=$(curl -s -c "$COOKIES" -b "$COOKIES" -d "action=wpthistle_backup_notify_test&nonce=$NONCE6" "$BASE_URL/wp-admin/admin-ajax.php")
+wpr eval "update_option('wpthistle_test_reject_attachment', false);" > /dev/null
+echo "$TEST_RESULT_M" | grep -qi 'Pushover: OK' || { echo "FAIL: the fallback retry (without the icon) must still report Pushover: OK even though the first, icon-enriched attempt was rejected. Response: $TEST_RESULT_M"; exit 1; }
+FALLBACK_CHECK=$(wpr eval "
+  \$all = get_option( 'wpthistle_test_captured_http', array() );
+  \$po_calls = array_values( array_filter( \$all, function ( \$c ) { return false !== strpos( \$c['url'], 'pushover.net' ); } ) );
+  if ( count( \$po_calls ) !== 2 ) { echo 'WRONG_CALL_COUNT:' . count( \$po_calls ); exit; }
+  if ( empty( \$po_calls[0]['body']['attachment_base64'] ) ) { echo 'FIRST_CALL_MISSING_ATTACHMENT'; exit; }
+  if ( ! empty( \$po_calls[1]['body']['attachment_base64'] ) ) { echo 'SECOND_CALL_STILL_HAS_ATTACHMENT'; exit; }
+  echo 'OK';
+")
+[ "$FALLBACK_CHECK" = "OK" ] || { echo "FAIL: expected exactly 2 Pushover calls (first with attachment_base64, rejected; second without it, accepted), got '$FALLBACK_CHECK'"; exit 1; }
+echo "OK  Pushover's fallback retry fires on rejection and still delivers the notification without the icon"
 
 echo
 echo "=== NOTIFICATIONS E2E TEST PASSED ==="

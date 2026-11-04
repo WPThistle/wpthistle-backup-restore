@@ -1,6 +1,18 @@
 # Changelog
 
-All notable changes to this project are documented here.
+**Historical record, frozen at 2.0.0.** Every entry below predates the
+2.0.0 rename and was written when this file was the project's only
+changelog. It was never updated for any release after 2.0.0 -- that's
+not an oversight being corrected here, it's a dropped second copy of
+the same information. `readme.txt`'s `== Changelog ==` section (the
+WordPress convention, and what the Plugins page/"View details" popup
+actually reads) has carried every release note since, in brief form;
+`STATUS.md` carries the full narrative -- what was built, what broke,
+what Vex found and fixed -- for every release including these early
+ones. Maintaining this file's own detailed prose in parallel with
+`STATUS.md` is exactly the kind of redundancy that let it silently die
+after 2.0.0 the first time, so it's being left frozen rather than
+backfilled. See `readme.txt` and `STATUS.md` for 2.1.0 onward.
 
 ## [2.0.0] — 2026-10-23 — Rename: WPGuard Nextcloud Backup -> WPThistle Backup and Restore
 

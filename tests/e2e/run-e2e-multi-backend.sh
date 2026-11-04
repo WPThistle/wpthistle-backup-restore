@@ -80,6 +80,15 @@ restore_original_settings() {
   if [ -n "$ORIGINAL_WP_RESTORE_PREFIX" ] && [ "$CURRENT_PREFIX" != "$ORIGINAL_WP_RESTORE_PREFIX" ]; then
     echo "=== Restoring WP_RESTORE_TABLE_PREFIX in .env ($CURRENT_PREFIX -> $ORIGINAL_WP_RESTORE_PREFIX) ==="
     sed -i "s/^WP_RESTORE_TABLE_PREFIX=.*/WP_RESTORE_TABLE_PREFIX=${ORIGINAL_WP_RESTORE_PREFIX}/" .env
+    # The persistent wp-restore apache container (started with `up -d` at
+    # line ~191 above, not `run --rm`) bakes WORDPRESS_TABLE_PREFIX into
+    # its own live process env at creation time -- editing .env alone
+    # does not make a running container re-read it. Without this
+    # recreate, every later script's real-HTTP path against wp-restore
+    # silently inherits this script's test prefix until something else
+    # happens to force a recreate first.
+    echo "=== Recreating wp-restore with the restored prefix ==="
+    MSYS_NO_PATHCONV=1 docker compose -p wpguard-test --env-file .env up -d --force-recreate wp-restore > /dev/null
   fi
 }
 trap restore_original_settings EXIT
@@ -226,12 +235,19 @@ docker compose -p wpguard-test exec -T -e OC_PASS="$OC_BACKUP_USER_PASSWORD" own
 echo "=== OpenCloud: ensure dedicated backup user exists, mint a fresh admin app token to provision it via Graph ==="
 ADMIN_TOKEN=$(docker exec wpguard-test-opencloud-1 opencloud auth-app create --user-name admin --expiration 1h | sed -n 's/^ token: //p')
 [ -n "$ADMIN_TOKEN" ] || { echo "FAIL: could not mint an OpenCloud admin app token"; exit 1; }
+# `|| true` on both curls below: on at least this host, `curl -o /dev/null`
+# intermittently exits 23 (CURLE_WRITE_ERROR) even though the response body
+# was correctly discarded and `-w` already printed/captured the real
+# status -- a local git-bash/MSYS `/dev/null` quirk, not a real request
+# failure. Bare in a `VAR=$(...)` assignment, that nonzero exit would
+# otherwise kill the whole script under `set -e` before the captured
+# value is ever inspected.
 USER_EXISTS=$(curl -sk --cacert certs/wpguard-test-ca.crt --user "admin:$ADMIN_TOKEN" \
-  "https://127.0.0.1:9200/graph/v1.0/users/$OPENCLOUD_BACKUP_USER" -o /dev/null -w "%{http_code}")
+  "https://127.0.0.1:9200/graph/v1.0/users/$OPENCLOUD_BACKUP_USER" -o /dev/null -w "%{http_code}") || true
 if [ "$USER_EXISTS" != "200" ]; then
   curl -sk --cacert certs/wpguard-test-ca.crt --user "admin:$ADMIN_TOKEN" -X POST -H "Content-Type: application/json" \
     --data "{\"displayName\":\"WPGuard Backup\",\"mail\":\"${OPENCLOUD_BACKUP_USER}@example.org\",\"onPremisesSamAccountName\":\"$OPENCLOUD_BACKUP_USER\",\"passwordProfile\":{\"password\":\"Unused-Login-Pw-Not-The-App-Token-1!\"}}" \
-    https://127.0.0.1:9200/graph/v1.0/users -o /dev/null -w "created backup user: HTTP %{http_code}\n"
+    https://127.0.0.1:9200/graph/v1.0/users -o /dev/null -w "created backup user: HTTP %{http_code}\n" || true
 fi
 OPENCLOUD_BACKUP_TOKEN=$(docker exec wpguard-test-opencloud-1 opencloud auth-app create --user-name "$OPENCLOUD_BACKUP_USER" --expiration 1h | sed -n 's/^ token: //p')
 [ -n "$OPENCLOUD_BACKUP_TOKEN" ] || { echo "FAIL: could not mint an OpenCloud app token for $OPENCLOUD_BACKUP_USER"; exit 1; }

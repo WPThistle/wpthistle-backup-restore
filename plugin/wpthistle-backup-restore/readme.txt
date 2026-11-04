@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.5.0
+Stable tag: 2.6.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -187,6 +187,13 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.6.0 =
+Pushover notifications now show the WPThistle icon too, the same as Discord, Slack, ntfy, Gotify, and Telegram already did -- it just needed a different delivery mechanism (Pushover has no URL-based image option) rather than being a platform limitation as the 2.5.0 note below said. If Pushover ever rejects the icon-enriched message, the notification automatically retries without the icon rather than being lost.
+
+Housekeeping: fixed a local test-harness quirk that was occasionally causing a few E2E test scripts to fail or abort partway through on this project's own development machine. No effect on the plugin itself.
+
+Reviewed by a security audit before release: no findings beyond one low-severity gap (no fallback if Pushover rejected the icon-enriched request), fixed and verified same-day.
 
 = 2.5.0 =
 Notifications now say who they're from. Email alerts get a real subject line (plugin and site name) and a proper HTML body with the WPThistle mark and a clear summary (plugin, site, result, backup ID, time, and the error if there was one). Discord, Slack, ntfy, Gotify, and Telegram messages now show the WPThistle icon alongside the alert; Pushover gets a link back to your settings page instead (no inline icon there -- a platform limitation, not an oversight).

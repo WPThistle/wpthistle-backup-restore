@@ -1,6 +1,100 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
-## Unreleased (not yet tagged) — Notifications tab: secret-field "Saved"/"Clear" UI now updates live after AJAX save, 2026-11-03
+## 2.6.0 — Pushover inline icon, two test-infra fixes, a frozen CHANGELOG.md, 2026-11-04
+
+Owner's instruction this round: work through four previously-flagged
+items (a known-missing feature, a known test-infra gap, confirming
+OpenCloud E2E coverage, and a stale duplicate changelog file), testing/
+validating as needed, no release until all four are done. All four
+done; none required asking the owner anything along the way.
+
+- **Pushover inline icon** (the deliberately-skipped half of 2.5.0's
+  notification rich-formatting feature). Pushover has no URL-based
+  inline-image mechanism the way Discord/Slack/ntfy/Gotify/Telegram do
+  -- only `attachment_base64` (read + base64-encode a local file) or a
+  multipart upload, flagged in 2.5.0 as "new disk/encoding surface in a
+  class that currently does none." New `Notifications::icon_attachment()`
+  reads the plugin's own bundled icon (a fixed, hardcoded path, never
+  user/request input) and base64-encodes it; `build_pushover_request()`
+  gained an optional `icon_base64`/`icon_mime` pair in `$extra` (default
+  absent, byte-identical to before when omitted); `send_to_channel()`'s
+  `'pushover'` case wires it in. 3 new unit tests (259/259 total). Live
+  E2E (`run-e2e-notifications.sh` Case L) proves the real disk read:
+  decodes the captured `attachment_base64` field against a
+  `pre_http_request` mock and confirms it's byte-identical to the real
+  bundled file read directly off disk in that same container.
+  **Vex security audit (T30 in docs/threat-model.md): CLEAR TO SHIP.**
+  One LOW (LOW-V-06: no fallback if Pushover rejected the icon-enriched
+  request, same failure class as 2.5.0's Slack/Telegram findings) found
+  and fixed same-day -- same two-attempt retry pattern, verified live by
+  a new Case M that forces a real rejection via the mock and confirms
+  the fallback both fires and still delivers (exactly 2 captured calls:
+  first with the attachment, rejected; second without it, accepted).
+- **Test-infra fix: `run-e2e-multi-backend.sh`'s cleanup left
+  `wp-restore`'s table prefix stuck.** Flagged after 2.4.0 as a known
+  gap: the exit trap restored `WP_RESTORE_TABLE_PREFIX` in `.env` but
+  never recreated the persistent `wp-restore` apache container, which
+  bakes that env var in at creation time -- every later script's
+  real-HTTP path against `wp-restore` silently inherited this script's
+  test prefix until something else forced a recreate. Fixed: the trap
+  now force-recreates `wp-restore` when it actually changes the prefix
+  back. Verified live: ran the full multi-backend drill (ownCloud +
+  OpenCloud) end to end, confirmed the recreate fires and leaves the
+  right prefix behind.
+- **Found along the way, blocking the above validation: a real,
+  previously-unexplained curl quirk.** `curl -o /dev/null` intermittently
+  exits 23 (`CURLE_WRITE_ERROR`) on this host even though the response
+  was correctly received and `-w` already captured the real status --
+  a local git-bash/MSYS `/dev/null` write quirk. Bare in a `VAR=$(...)`
+  assignment or a standalone statement, that nonzero exit silently killed
+  the whole script under `set -e` before the captured value was ever
+  inspected. This is almost certainly the real cause behind this
+  project's own long-documented "could not extract nonce from settings
+  page" flakiness (see the 2.3.0/2.4.0 entries below), previously
+  chalked up to an unexplained "sequencing artifact." Fixed with `|| true`
+  at every affected call site across `run-e2e-multi-backend.sh`,
+  `run-e2e-notifications.sh`, `run-e2e-download-backup.sh`,
+  `run-e2e-forget-connection.sh`, and `run-e2e-restore-migration.sh`.
+  Also found and fixed, same investigation: `run-e2e-notifications.sh`
+  never self-healed `wp-restore`'s table prefix before using it the way
+  `run-e2e-restore.sh`/`run-e2e-multi-backend.sh` already do -- exposed
+  directly by running the multi-backend fix-verification immediately
+  before it, which is exactly the "immediately after another suite"
+  condition this project's own history already associated with this
+  symptom. Fixed with the same self-heal-on-entry pattern. **A second,
+  separate flake initially suspected in `run-e2e-download-backup.sh`/
+  `run-e2e-forget-connection.sh` (login intermittently returning 200
+  instead of 302) turned out to be self-inflicted**: invoking these
+  scripts with a blanket `MSYS_NO_PATHCONV=1` prefix (rather than scoped
+  to just the `docker run -v`/`docker compose` lines that need it, which
+  is how every script in this suite already does it) broke the plain
+  `curl -c "$SCRATCH/cookies.txt"` calls' MSYS path translation for a
+  POSIX-style `$(pwd)`-derived path. Confirmed by direct reproduction
+  both ways; both scripts pass clean on the first attempt with correct,
+  scoped invocation. No code or script-logic fix was needed or applied
+  for this one -- a retry-loop band-aid was written, tested, and then
+  reverted once the real cause was found, rather than left in to mask a
+  non-bug.
+- **OpenCloud E2E coverage confirmed current.** The OpenCloud test
+  container was flagged as possibly stopped; it was actually already
+  running (that note was itself stale). Confirmed by running the full
+  `run-e2e-multi-backend.sh` drill against it end to end (connection,
+  backup, incremental, chain-aware retention, restore) -- passes clean.
+- **`CHANGELOG.md` frozen, not backfilled.** Stale since the 2.0.0
+  rename (2026-10-23) while `readme.txt`'s own `== Changelog ==` section
+  kept going -- a dropped second copy of the same narrative, not an
+  oversight. Backfilling five releases' worth of detailed prose into it
+  would just recreate the redundancy that let it die the first time;
+  instead it now carries a clear header explaining it's a historical
+  record frozen at 2.0.0, with `readme.txt` and this file pointed to as
+  the real source going forward.
+- Full regression: 259/259 unit tests; `run-e2e.sh` (CI's own canonical
+  suite), `run-e2e-multi-backend.sh`, `run-e2e-notifications.sh`,
+  `run-e2e-download-backup.sh`, `run-e2e-forget-connection.sh`, and
+  `run-e2e-restore-migration.sh` all re-run clean with corrected
+  invocation.
+
+## 2.5.0 — Notifications tab: secret-field "Saved"/"Clear" UI now updates live after AJAX save, 2026-11-03
 
 the owner's report: he'd saved real credentials for Discord/Slack/Pushover/
 Telegram, but the "Clear saved value" checkbox and "Saved (leave blank to
@@ -29,10 +123,9 @@ reload; clear-checkbox save -> both revert, also with no reload. 253/253
 unit tests unaffected (this is pure admin-page JS/template, not covered by
 the unit suite).
 
-## Unreleased (not yet tagged) — Notification identification + rich formatting, LOW-N-04-RESIDUAL real fix, 2026-11-03
+## 2.5.0 — Notification identification + rich formatting, LOW-N-04-RESIDUAL real fix, 2026-11-03
 
-Not yet tagged/released -- owner's explicit instruction this round. Two
-independent pieces of work, both verified, neither shipped yet.
+Shipped as part of 2.5.0. Two independent pieces of work, both verified.
 
 **Notification identification + rich formatting** (owner's request: "nothing
 says WPThistle... is it possible to include the plugin and site in the
@@ -84,11 +177,10 @@ class reworked:
   byte-identical to before. Full `tests/e2e/run-e2e-notifications.sh`
   battery (11 cases) re-run clean against the live disposable stack after
   the change, including a real captured email and a real Discord HTTP POST.
-- **Not yet done**: no Vex security pass on this specific diff. No new
-  credential/auth surface was touched (same secrets, same channels, same
-  `send_request()`), but it's new code generating URLs/HTML from job data,
-  so a pass before tagging is still warranted per this project's own
-  discipline, not skipped out of expedience.
+- Vex's comprehensive pre-release audit (covering this plus the other two
+  bodies of work in this release, see T29) found 5 LOW findings here
+  (non-ASCII/multibyte handling, Slack block-text length, delivery
+  fallbacks, a DOM-state race), all fixed before tagging.
 
 **LOW-N-04-RESIDUAL, actually fixed this time.** Vex's 2026-11-03 re-audit
 (see docs/threat-model.md T28) found the 2.4.1 "fix" below wasn't atomic
@@ -126,7 +218,7 @@ leftover from the same-day CAS edit, sitting directly above the correct
 one) both overstated `add_option()`'s role -- the stale docblock removed
 outright, T27 corrected.
 
-## Unreleased (not yet tagged) — Notifications hardening: credential clear + test-endpoint rate limit, 2026-11-02
+## 2.4.1 — Notifications hardening: credential clear + test-endpoint rate limit, 2026-11-02
 
 Closes the two LOW findings accepted (not fixed) in the 2.4.0 entry
 below. Owner's call: iterate on these now rather than leave them open,

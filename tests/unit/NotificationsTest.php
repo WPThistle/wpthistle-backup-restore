@@ -268,6 +268,22 @@ function test_build_pushover_request_without_extra_omits_url_fields() {
 	wpguard_assert( ! isset( $req['args']['body']['url'] ) && ! isset( $req['args']['body']['url_title'] ), 'no $extra means no url/url_title fields at all' );
 }
 
+function test_build_pushover_request_with_icon_base64_adds_attachment_fields() {
+	$req = Notifications::build_pushover_request( 'u', 't', 'T', 'M', array( 'icon_base64' => 'ZmFrZS1wbmctYnl0ZXM=', 'icon_mime' => 'image/png' ) );
+	wpguard_assert_equals( 'ZmFrZS1wbmctYnl0ZXM=', $req['args']['body']['attachment_base64'], 'attachment_base64 must carry the given base64 data verbatim' );
+	wpguard_assert_equals( 'image/png', $req['args']['body']['attachment_type'], 'attachment_type must carry the given mime type' );
+}
+
+function test_build_pushover_request_with_icon_base64_defaults_mime_to_png() {
+	$req = Notifications::build_pushover_request( 'u', 't', 'T', 'M', array( 'icon_base64' => 'ZmFrZS1wbmctYnl0ZXM=' ) );
+	wpguard_assert_equals( 'image/png', $req['args']['body']['attachment_type'], 'omitting icon_mime must default to image/png, not be missing' );
+}
+
+function test_build_pushover_request_without_icon_base64_omits_attachment_fields() {
+	$req = Notifications::build_pushover_request( 'u', 't', 'T', 'M', array( 'manage_url' => 'https://example.test/' ) );
+	wpguard_assert( ! isset( $req['args']['body']['attachment_base64'] ) && ! isset( $req['args']['body']['attachment_type'] ), 'no icon_base64 means no attachment fields at all, even with other $extra keys present' );
+}
+
 function test_build_webhook_request_includes_plugin_name_and_icon_url() {
 	$req = Notifications::build_webhook_request( 'https://n8n.example.com/hook', wpguard_test_job_verified(), 'My Site', 'https://example.test/icon.png' );
 	$body = json_decode( $req['args']['body'], true );
@@ -375,6 +391,9 @@ return array(
 	'test_build_telegram_request_caption_truncates_to_1024',
 	'test_build_pushover_request_with_manage_url_adds_url_fields',
 	'test_build_pushover_request_without_extra_omits_url_fields',
+	'test_build_pushover_request_with_icon_base64_adds_attachment_fields',
+	'test_build_pushover_request_with_icon_base64_defaults_mime_to_png',
+	'test_build_pushover_request_without_icon_base64_omits_attachment_fields',
 	'test_build_webhook_request_includes_plugin_name_and_icon_url',
 	'test_build_webhook_request_icon_url_defaults_to_empty_string',
 	'test_build_email_html_includes_wordmark_and_details_table',

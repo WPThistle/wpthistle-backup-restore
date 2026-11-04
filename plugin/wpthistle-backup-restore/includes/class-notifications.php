@@ -336,12 +336,14 @@ class Notifications {
 	 * Pure. Pushover's own documented limits: title 250 chars, message
 	 * 1024. 2026-11-03: $extra['manage_url'] (optional, default none)
 	 * adds Pushover's 'url'/'url_title' fields -- a clickable link shown
-	 * under the notification. Deliberately NOT an inline image: Pushover
-	 * only accepts an actual image via attachment_base64 (reading and
-	 * base64-encoding a local file) or a multipart file upload, either
-	 * of which is new disk/encoding surface in a class that currently
-	 * does none -- out of scope for this pass, flagged rather than
-	 * built blind.
+	 * under the notification. 2026-11-04: $extra['icon_base64']
+	 * (optional, default none; see icon_attachment() below for where
+	 * it's actually read from disk) adds Pushover's 'attachment_base64'/
+	 * 'attachment_type' fields -- Pushover has no URL-based inline-image
+	 * mechanism the way Discord/Slack/ntfy/Gotify/Telegram do, only a
+	 * base64-encoded body field or a multipart upload. This function
+	 * stays pure either way: it never touches disk itself, only embeds
+	 * whatever bytes $extra already carries.
 	 */
 	public static function build_pushover_request( string $user_key, string $api_token, string $title, string $message, array $extra = array() ): array {
 		$body = array(
@@ -353,6 +355,10 @@ class Notifications {
 		if ( ! empty( $extra['manage_url'] ) ) {
 			$body['url']       = $extra['manage_url'];
 			$body['url_title'] = __( 'Manage WPThistle', 'wpthistle-backup-restore' );
+		}
+		if ( ! empty( $extra['icon_base64'] ) ) {
+			$body['attachment_base64'] = $extra['icon_base64'];
+			$body['attachment_type']   = empty( $extra['icon_mime'] ) ? 'image/png' : $extra['icon_mime'];
 		}
 		return array(
 			'url'  => 'https://api.pushover.net/1/messages.json',
@@ -638,6 +644,35 @@ class Notifications {
 	}
 
 	/**
+	 * 2026-11-04: Pushover's only image mechanisms are attachment_base64
+	 * (a base64-encoded file body in the same POST) or a multipart file
+	 * upload -- no URL-based option, unlike every other image-capable
+	 * channel here. Reads the plugin's own bundled icon (a fixed path
+	 * under this plugin's own directory, never user input, so there's
+	 * no traversal/upload surface here) fresh on every call rather than
+	 * caching it: this runs at most once per dispatch (one Pushover send
+	 * per backup/test-notification), and a long-running PHP-FPM worker
+	 * caching a stale copy across an in-place plugin update/icon
+	 * replacement is a worse failure mode than one extra small disk
+	 * read. A missing or unreadable file degrades to no attachment
+	 * (the notification still sends, just without the icon), never to a
+	 * failed or skipped notification.
+	 */
+	private static function icon_attachment(): array {
+		if ( ! defined( 'WPTHISTLE_BACKUP_DIR' ) ) {
+			return array();
+		}
+		$raw = @file_get_contents( WPTHISTLE_BACKUP_DIR . 'assets/images/logo-icon-color.png' );
+		if ( false === $raw || '' === $raw ) {
+			return array();
+		}
+		return array(
+			'base64' => base64_encode( $raw ),
+			'mime'   => 'image/png',
+		);
+	}
+
+	/**
 	 * The "Send Test Notification" button: same per-channel send path as
 	 * dispatch_all(), but with no real job to describe, so a synthetic
 	 * one (status 'test', never a real job status) stands in. The
@@ -704,8 +739,32 @@ class Notifications {
 				}
 				return $result;
 			case 'pushover':
-				$req = self::build_pushover_request( $all['notify_pushover_user_key'], $all['notify_pushover_api_token'], $text['title'], $text['message'], array( 'manage_url' => $text['manage_url'] ) );
-				return self::send_request( $req['url'], $req['args'] );
+				$po_extra = array( 'manage_url' => $text['manage_url'] );
+				$icon     = self::icon_attachment();
+				if ( ! empty( $icon ) ) {
+					$po_extra['icon_base64'] = $icon['base64'];
+					$po_extra['icon_mime']   = $icon['mime'];
+				}
+				$req    = self::build_pushover_request( $all['notify_pushover_user_key'], $all['notify_pushover_api_token'], $text['title'], $text['message'], $po_extra );
+				$result = self::send_request( $req['url'], $req['args'] );
+				/**
+				 * Vex security audit, 2026-11-04 (LOW-V-06): no live
+				 * request with a real Pushover account has ever actually
+				 * exercised attachment_base64 (E2E Case L uses a
+				 * pre_http_request mock) -- if Pushover's real API
+				 * rejects the attachment-enriched request for any
+				 * reason, the notification would be lost outright with
+				 * no fallback, where before this feature it would have
+				 * delivered. Same pattern as the existing Slack/Telegram
+				 * fallbacks: retry without the icon fields (manage_url
+				 * stays, since that path is already proven) on any
+				 * non-2xx first response.
+				 */
+				if ( true !== $result && ! empty( $po_extra['icon_base64'] ) ) {
+					$req = self::build_pushover_request( $all['notify_pushover_user_key'], $all['notify_pushover_api_token'], $text['title'], $text['message'], array( 'manage_url' => $text['manage_url'] ) );
+					return self::send_request( $req['url'], $req['args'] );
+				}
+				return $result;
 			case 'pushbullet':
 				$req = self::build_pushbullet_request( $all['notify_pushbullet_access_token'], $text['title'], $text['message'] );
 				return self::send_request( $req['url'], $req['args'] );

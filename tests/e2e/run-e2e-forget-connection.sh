@@ -69,11 +69,17 @@ echo "OK  seeded: owncloud/fake-nc.example.test + tiered schedule + custom reten
 echo
 echo "=== Real authenticated HTTP login (cookie jar, not wp eval) ==="
 COOKIES="$SCRATCH/cookies.txt"
-curl -s -c "$COOKIES" "$BASE_URL/wp-login.php" -o /dev/null
+# `|| true` on both: on at least this host, `curl -o /dev/null`
+# intermittently exits nonzero (CURLE_WRITE_ERROR) even on a normal
+# response -- a local git-bash/MSYS `/dev/null` quirk, not a real
+# request failure. The actual login verification is the NONCE
+# extraction below, which this must not be allowed to mask under
+# `set -e`.
+curl -s -c "$COOKIES" "$BASE_URL/wp-login.php" -o /dev/null || true
 curl -s -c "$COOKIES" -b "$COOKIES" \
   --data-urlencode "log=$ADMIN_USER" --data-urlencode "pwd=$ADMIN_PASS" \
   -d "wp-submit=Log+In&redirect_to=$BASE_URL%2Fwp-admin%2F&testcookie=1" \
-  "$BASE_URL/wp-login.php" -o /dev/null
+  "$BASE_URL/wp-login.php" -o /dev/null || true
 PAGE=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
 [[ "$PAGE" == *"wpthistle_backup_forget_btn"* ]] || { echo "FAIL: could not load the authenticated settings page, or Forget Connection markup is missing (login failed?)"; exit 1; }
 NONCE=$(echo "$PAGE" | sed -n 's/.*var nonce = "\([a-f0-9]*\)".*/\1/p')

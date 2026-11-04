@@ -199,7 +199,14 @@ fi
 [[ "$LOGIN_REDIRECT" == *"127.0.0.1:8082"* ]] || { echo "FAIL: wp-admin's redirect doesn't point at the new site at all: $LOGIN_REDIRECT"; exit 1; }
 echo "OK  wp-admin's not-logged-in redirect correctly stays on the new site, never bounces toward the old domain"
 
-LOGIN_PAGE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8082/wp-login.php 2>&1)
+# `-s` alone (no `-S`) already suppresses curl's own error text, so the
+# `2>&1` this line used to have would only have let a stray
+# CURLE_WRITE_ERROR message (see the login blocks elsewhere in this
+# suite) corrupt the captured status code instead of being discarded;
+# removed. `|| true` tolerates that same /dev/null write quirk's
+# nonzero exit under `set -e` -- the real check is the status-code
+# comparison below, which still runs either way.
+LOGIN_PAGE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8082/wp-login.php) || true
 [ "$LOGIN_PAGE" = "200" ] || { echo "FAIL: wp-login.php returned $LOGIN_PAGE, expected 200"; exit 1; }
 echo "OK  wp-login.php loads cleanly on the new site"
 

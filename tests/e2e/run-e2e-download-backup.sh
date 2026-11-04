@@ -66,11 +66,22 @@ echo "OK  fixtures seeded, sentinel option = $SENTINEL_OPTION_EXPECTED"
 echo
 echo "=== Real authenticated HTTP login (cookie jar, not wp eval) ==="
 COOKIES="$SCRATCH/cookies.txt"
-curl -s -c "$COOKIES" "$BASE_URL/wp-login.php" -o /dev/null
+# `|| true` on both: on at least this host, `curl -o /dev/null`
+# intermittently exits nonzero (CURLE_WRITE_ERROR) even on a normal
+# response -- a local git-bash/MSYS `/dev/null` quirk, not a real
+# request failure. Neither call's own exit code was ever a real
+# login-success check anyway; the actual verification is the NONCE
+# extraction below, which this must not be allowed to mask under
+# `set -e`. This is almost certainly the real cause behind this
+# script's own long-documented, previously-unexplained "could not
+# extract nonce from settings page" flakiness (see STATUS.md 2.3.0/
+# 2.4.0 entries) -- an intermittent abort here, silently, before the
+# login ever completed.
+curl -s -c "$COOKIES" "$BASE_URL/wp-login.php" -o /dev/null || true
 curl -s -c "$COOKIES" -b "$COOKIES" \
   --data-urlencode "log=$ADMIN_USER" --data-urlencode "pwd=$ADMIN_PASS" \
   -d "wp-submit=Log+In&redirect_to=$BASE_URL%2Fwp-admin%2F&testcookie=1" \
-  "$BASE_URL/wp-login.php" -o /dev/null
+  "$BASE_URL/wp-login.php" -o /dev/null || true
 PAGE=$(curl -s -c "$COOKIES" -b "$COOKIES" "$BASE_URL/wp-admin/admin.php?page=wpthistle-backup-restore")
 echo "$PAGE" > "$SCRATCH/settings-page.html"
 [[ "$PAGE" == *"wpthistle_backup_download_now"* ]] || { echo "FAIL: could not load the authenticated settings page (login failed?)"; exit 1; }
@@ -152,7 +163,7 @@ CODE_BADNONCE=$(curl -s -c "$COOKIES" -b "$COOKIES" -o "$SCRATCH/badnonce.bin" -
 echo "OK  authenticated-but-bad-nonce request denied (403)"
 
 DIRECT_URL="$BASE_URL/wp-content/wpthistle-backup-restore-tmp/downloads/$DOWNLOAD_TOKEN/"
-CODE_DIRECT=$(curl -s -o /dev/null -w "%{http_code}" "$DIRECT_URL")
+CODE_DIRECT=$(curl -s -o /dev/null -w "%{http_code}" "$DIRECT_URL") || true # tolerate the /dev/null write quirk, see the login block above
 [ "$CODE_DIRECT" != "200" ] || { echo "FAIL: the guarded downloads directory is directly web-listable/servable ($CODE_DIRECT)"; exit 1; }
 echo "OK  guarded downloads directory not directly web-accessible (got $CODE_DIRECT)"
 
@@ -217,7 +228,7 @@ TOKEN_DIR_2=$(wpr eval "echo \WPThistle\BackupRestore\Job_Orchestrator::download
 curl -s -c "$COOKIES" -b "$COOKIES" -d "action=wpthistle_backup_delete_download_bundle&nonce=$NONCE&job_id=$JOB_ID_2" "$BASE_URL/wp-admin/admin-ajax.php" > /dev/null
 EXISTS_DELETED=$(wpcli_sh "[ -d '$TOKEN_DIR_2' ] && echo yes || echo no")
 [ "$EXISTS_DELETED" = "no" ] || { echo "FAIL: explicit delete did not remove the bundle directory"; exit 1; }
-CODE_AFTER_DELETE=$(curl -s -c "$COOKIES" -b "$COOKIES" -o /dev/null -w "%{http_code}" "$BASE_URL/wp-admin/admin-post.php?action=wpthistle_backup_download_bundle&job_id=$JOB_ID_2&nonce=$DOWNLOAD_NONCE")
+CODE_AFTER_DELETE=$(curl -s -c "$COOKIES" -b "$COOKIES" -o /dev/null -w "%{http_code}" "$BASE_URL/wp-admin/admin-post.php?action=wpthistle_backup_download_bundle&job_id=$JOB_ID_2&nonce=$DOWNLOAD_NONCE") || true # tolerate the /dev/null write quirk, see the login block above
 [ "$CODE_AFTER_DELETE" = "404" ] || { echo "FAIL: download endpoint did not 404 after explicit delete (got $CODE_AFTER_DELETE)"; exit 1; }
 echo "OK  explicit delete removes the bundle; endpoint 404s afterward"
 
