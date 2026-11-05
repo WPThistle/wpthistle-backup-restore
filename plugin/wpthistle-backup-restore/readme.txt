@@ -193,6 +193,8 @@ backup sooner than expected.
 = 2.7.1 =
 Moved the Migrate explainer out of its own dedicated nav tab and into a new section under the Advanced tab. The tab added no functionality of its own beyond checking the existing "this backup is from a different site" box and jumping back to Home -- it didn't warrant a dedicated top-level tab by itself. Same explanatory text, same non-goals notice, same button and behavior; purely a navigation change, no backend logic touched.
 
+Simplified the migration checkbox on the Home tab itself: the long inline explanation (what checking it rewrites, the non-goals) is now just on the Advanced tab's Migrate section, with the Home tab pointing there instead of repeating it. The checkbox and its core behavior are unchanged.
+
 = 2.7.0 =
 Added a dedicated Migrate tab that walks through moving this site to a new domain, step by step, and makes clear what it is and isn't: a one-time domain move (not a staging &lt;-&gt; production sync tool), with the same credentials and settings carried over exactly, only the domain changing.
 

@@ -1041,8 +1041,8 @@ class Admin {
 					<td>
 						<input type="text" id="wpthistle_backup_restore_confirm_text" class="regular-text" placeholder="RESTORE">
 						<p class="description"><?php esc_html_e( 'Type RESTORE to enable the button below.', 'wpthistle-backup-restore' ); ?></p>
-						<label><input type="checkbox" id="wpthistle_backup_restore_confirm_url"> <?php esc_html_e( 'Migrate this backup to this site: this backup is from a different site, and I want every URL in it rewritten to this site\'s own address', 'wpthistle-backup-restore' ); ?></label>
-						<p class="description"><?php esc_html_e( 'Checking this does not just skip the mismatch warning -- it rewrites every occurrence of the backup\'s own domain (in post content, widget settings, and everywhere else WordPress stores a URL) to this site\'s domain, before anything is restored live. Leave unchecked to restore this backup onto the exact site it came from.', 'wpthistle-backup-restore' ); ?></p>
+						<label><input type="checkbox" id="wpthistle_backup_restore_confirm_url"> <?php esc_html_e( 'This backup is from a different site -- migrate its URLs to this site\'s address', 'wpthistle-backup-restore' ); ?></label>
+						<p class="description"><?php esc_html_e( 'Leave unchecked to restore this backup onto the exact site it came from. See the Migrate section under the Advanced tab for what checking this actually does and what it does not cover.', 'wpthistle-backup-restore' ); ?></p>
 					</td>
 				</tr>
 			</table>

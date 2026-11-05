@@ -56,6 +56,19 @@ release rather than new feature work:
   a site actually *served* at a subdirectory works over real Apache
   rewrite rules.
 
+- **the owner's follow-up: simplify the migration checkbox on the Home tab
+  itself and point to Advanced for details.** The checkbox's label and
+  help text had grown to duplicate most of the new Migrate section's
+  own explanation (what checking it rewrites, the non-goals) right
+  there under Home. Shortened the label to one clause and replaced the
+  help paragraph with a single line pointing at the Advanced tab's
+  Migrate section for the actual explanation -- the checkbox's
+  essential safety-relevant fact (what checking vs. leaving it
+  unchecked does) stays on Home; the walkthrough and non-goals live
+  only in one place now instead of two. `php -l` clean; live
+  Playwright check confirms the new label/help text render correctly
+  and the checkbox still works.
+
 Plugin version bumped 2.7.0 -> 2.7.1 (readme.txt changelog entry
 added; `Version:`/`WPTHISTLE_BACKUP_VERSION` bumped). Not yet tagged or
 released -- same pattern as the 2.7.0 round, stopping for the owner's
