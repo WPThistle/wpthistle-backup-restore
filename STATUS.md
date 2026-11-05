@@ -81,9 +81,9 @@ release rather than new feature work:
   button still works.
 
 Plugin version bumped 2.7.0 -> 2.7.1 (readme.txt changelog entry
-added; `Version:`/`WPTHISTLE_BACKUP_VERSION` bumped). Not yet tagged or
-released -- same pattern as the 2.7.0 round, stopping for the owner's
-review before cutting the tag.
+added; `Version:`/`WPTHISTLE_BACKUP_VERSION` bumped). Tagged and
+released: `v2.7.1` cut, GitHub Release published, CI green on the
+tag push.
 
 ## 2.7.0 (released) — Dedicated Migrate tab; symmetric idempotency guard fix, 2026-11-04
 

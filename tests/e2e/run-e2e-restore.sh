@@ -14,6 +14,12 @@
 # (sentinel option, post count, active theme); wp-restore is already
 # freshly re-provisioned (wp core install) by every test that touches
 # it, so it is the only safe target for a real in-place restore test.
+#
+# NC_TEST_* credentials were revoked 2026-11-04 (the cloud.tomcat.casa
+# test account was shut down) and removed from secrets.env. This script
+# cannot run until re-enabled: Holt requests a fresh test account from
+# the owner, who provisions it and provides new NC_TEST_HOST/NC_TEST_USER/
+# NC_TEST_APP_PASSWORD values to add back to secrets.env.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOCKER_DIR="$ROOT/docker"
@@ -28,6 +34,11 @@ fi
 NC_TEST_HOST=$(grep '^NC_TEST_HOST=' "$SECRETS" | cut -d= -f2-)
 NC_TEST_USER=$(grep '^NC_TEST_USER=' "$SECRETS" | cut -d= -f2-)
 NC_TEST_APP_PASSWORD=$(grep '^NC_TEST_APP_PASSWORD=' "$SECRETS" | cut -d= -f2-)
+if [ -z "$NC_TEST_HOST" ] || [ -z "$NC_TEST_USER" ] || [ -z "$NC_TEST_APP_PASSWORD" ]; then
+  echo "FAIL: NC_TEST_* credentials not set in $SECRETS -- test account was revoked 2026-11-04." >&2
+  echo "Ask the owner to provision a fresh cloud.tomcat.casa test account and add new NC_TEST_HOST/NC_TEST_USER/NC_TEST_APP_PASSWORD values." >&2
+  exit 1
+fi
 
 REAL_SITE_ID="example-com-ff09cd"
 REAL_BACKUP_ID="20261020T023149Z-9ca75a64"
