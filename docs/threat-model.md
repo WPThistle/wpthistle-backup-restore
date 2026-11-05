@@ -596,6 +596,10 @@ Vex security audit, SOP-023, 2026-11-04, scoped to: `DB_Migrator::replace_pairs_
 
 **Verdict: CLEAR TO SHIP.** No CRITICAL or HIGH findings. One MEDIUM (MEDIUM-MIG-3) found before audit and fixed same-day; one LOW (LOW-MIG-2) found during audit and fixed same-day. `php -l` clean. 262/262 unit tests (3 new). `tests/e2e/run-e2e-restore-migration.sh` re-run clean after both fixes.
 
+**2.7.1 follow-up (2026-11-04): the Migrate nav tab was removed and its content moved into a new section under the existing Advanced tab**, after the owner pointed out the tab added no functionality beyond checking the pre-existing confirm checkbox and switching tabs -- exactly what this section's own analysis above already established. The markup, button, and behavior are unchanged; only the surrounding container and the nav-tab entry moved. No re-audit needed: the no-new-attack-surface analysis above was never about the tab specifically, it was about the content, which didn't change. `php -l` clean; live Playwright check confirms no "Migrate" nav tab, the section renders under Advanced, and the button still checks the box and switches to Home correctly.
+
+Separately, a live E2E gap this round's own scoping had left unexamined was closed after shipping: `tests/e2e/run-e2e-restore-migration-subdir.sh` (new, not wired into `ci.yml`) proves all four subdirectory-shaped migration outcomes through a real restore -- domain change landing in a subdirectory (verified), domain change with the old side already in a subdirectory (verified, live proof of the boundary lookahead with a path on the old side), and both directions of same-host subdirectory extension (refused at `restore_preflight`, confirmed the new site is left completely untouched). Previously these shapes were only unit-tested against `DB_Migrator`'s pair logic in isolation.
+
 ## Residual risks accepted for MVP, with owner-visible documentation
 
 - App password at rest in `wp_options` (ADR 0002) unless the operator uses

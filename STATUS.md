@@ -1,6 +1,67 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
-## 2.7.0 (release candidate) — Dedicated Migrate tab; symmetric idempotency guard fix, 2026-11-04
+## 2.7.1 — Migrate tab folded into Advanced; live subdirectory-migration E2E coverage, 2026-11-04
+
+v2.7.0 shipped (tagged, GitHub Release published, CI green). Two
+follow-ups the same day, both prompted by the owner reviewing the shipped
+release rather than new feature work:
+
+- **the owner's observation: the Migrate tab did nothing a checkbox
+  couldn't.** Asked directly whether the tab was anything more than
+  "check the box and return to Home" -- confirmed it wasn't: the
+  button's entire click handler checks `#wpthistle_backup_restore_
+  confirm_url`, fires its `change` event, switches the active tab to
+  Home, and scrolls/focuses the confirm field. Zero new PHP, zero new
+  AJAX action, zero new restore step -- `DB_Migrator`/
+  `Restore_Orchestrator` were completely untouched by the tab itself.
+  What it *did* add beyond the shortcut: a named nav entry
+  (discoverability), explanatory copy, an explicit non-goals notice,
+  and a 3-step walkthrough -- all pure UI/messaging, no backend
+  capability. the owner's call: fold it into a new section under the
+  existing Advanced tab instead of a dedicated top-level tab, keeping
+  the same button/behavior. Done: removed the "Migrate" nav-tab link
+  and its standalone panel, spliced the same heading/description/
+  notice/steps/button into Advanced (above "Guaranteed scheduling",
+  separated by an `<hr>`), removed the now-dead `migrate` key from the
+  JS `tabPanels` map. `php -l` clean; live Playwright check confirms no
+  "Migrate" nav tab, the section renders correctly under Advanced, and
+  the button still checks the box and switches to Home. No backend
+  logic touched, so no new Vex audit needed -- `docs/threat-model.md`
+  T31 already established the content itself (not the tab container)
+  carries no attack surface; a short follow-up note added there and to
+  `README.md`/`readme.txt` wording.
+- **the owner's question: was the new Migrate capability actually tested
+  for subdirectory-shaped domains, not just the ordinary case?** It
+  wasn't, beyond unit tests against `DB_Migrator`'s pair logic in
+  isolation -- `run-e2e-restore-migration.sh` (the existing live
+  regression test) only ever exercised an ordinary cross-domain move,
+  never a subdirectory shape on either side. Built
+  `tests/e2e/run-e2e-restore-migration-subdir.sh` (advisor-reviewed
+  before writing it) covering all four shapes through a real restore
+  (real MySQL, shadow tables, the actual `create_restore_job()`/
+  `advance()` pipeline): domain change landing in a subdirectory
+  (verified; links/widget/home/siteurl all correctly gain the suffix,
+  wp-admin's redirect correctly names the new login path over real
+  HTTP); domain change with the old side already in a subdirectory
+  (verified; live proof of the boundary lookahead with a path on the
+  old side -- sibling `/blogroll`/`/shop` links survive untouched);
+  and both directions of same-host subdirectory extension (refused at
+  `restore_preflight`, still read-only, confirmed via a sentinel
+  option/post that the new site is left completely untouched). All 4
+  passed live on the first run -- no plugin bug found, this closed a
+  test-coverage gap only. Not wired into `ci.yml`. Caveat stated
+  plainly to the owner: sites are installed with a `/blog`-suffixed `--url`
+  but WordPress core stays at the container docroot, so this proves
+  the migration logic and resulting URL values are correct, not that
+  a site actually *served* at a subdirectory works over real Apache
+  rewrite rules.
+
+Plugin version bumped 2.7.0 -> 2.7.1 (readme.txt changelog entry
+added; `Version:`/`WPTHISTLE_BACKUP_VERSION` bumped). Not yet tagged or
+released -- same pattern as the 2.7.0 round, stopping for the owner's
+review before cutting the tag.
+
+## 2.7.0 (released) — Dedicated Migrate tab; symmetric idempotency guard fix, 2026-11-04
 
 the owner's instruction: migration already works (the existing "this backup
 is from a different site" checkbox), but is buried as one checkbox

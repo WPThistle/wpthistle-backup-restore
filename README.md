@@ -11,12 +11,12 @@ Nextcloud server you control, over authenticated HTTPS WebDAV — with
 read-back SHA-256 verification on every component before anything is
 ever reported as a successful backup.
 
-**Status:** v2.7.0. Manual or scheduled backups, retention pruning,
+**Status:** v2.7.1. Manual or scheduled backups, retention pruning,
 incremental file backups, multi-backend support (Nextcloud, ownCloud,
 OpenCloud), one-click in-place restore (from either the configured
-destination or an uploaded backup bundle), and a dedicated Migrate tab
-for restoring an existing backup onto a new domain with every URL it
-contains rewritten to match. Every feature has gone through independent
+destination or an uploaded backup bundle), and a Migrate section
+(Advanced tab) for restoring an existing backup onto a new domain with
+every URL it contains rewritten to match. Every feature has gone through independent
 security audit, fixes, and re-verification before shipping — see
 `docs/threat-model.md` and `STATUS.md` for the full history (`CHANGELOG.md`
 is frozen at 2.0.0; `readme.txt` and `STATUS.md` carry every release since).
@@ -49,12 +49,12 @@ security model.
   interruption, including automatic stale-lock recovery and a WP-Cron
   fallback so a closed browser tab doesn't strand a job.
 - One-click in-place restore, from either the configured Nextcloud
-  destination or an uploaded backup bundle. A dedicated **Migrate**
-  tab restores an existing backup onto a new domain, rewriting every
-  URL it contains (including inside PHP-serialized data) to the new
-  site's own address — same domain, same everything else (credentials
-  included); not a staging-to-production credential migration — see
-  `docs/operations.md`.
+  destination or an uploaded backup bundle. A **Migrate** section
+  under the Advanced tab walks through restoring an existing backup
+  onto a new domain, rewriting every URL it contains (including
+  inside PHP-serialized data) to the new site's own address — same
+  domain, same everything else (credentials included); not a
+  staging-to-production credential migration — see `docs/operations.md`.
 - Self-hosted update feed via GitHub Releases — no wordpress.org
   listing required.
 - Admin UI with live job status/log, plus a WP-CLI command

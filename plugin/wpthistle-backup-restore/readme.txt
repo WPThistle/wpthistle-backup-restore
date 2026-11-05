@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.7.0
+Stable tag: 2.7.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -86,7 +86,7 @@ There's no one-click undo, but nothing a restore replaces is ever deleted outrig
 
 = Can I restore a backup onto a different domain, e.g. to migrate my site? =
 
-Yes -- there's a dedicated Migrate tab that walks through it. Take a backup on the old site, then on the new domain check "this backup is from a different site" when restoring, and every URL stored anywhere in the backup (post content, widget settings, serialized data, everywhere WordPress stores a URL) is rewritten to the new site's own address before anything goes live, so logging into the migrated site actually works afterward.
+Yes -- there's a Migrate section under the Advanced tab that walks through it. Take a backup on the old site, then on the new domain check "this backup is from a different site" when restoring, and every URL stored anywhere in the backup (post content, widget settings, serialized data, everywhere WordPress stores a URL) is rewritten to the new site's own address before anything goes live, so logging into the migrated site actually works afterward.
 
 This is a one-time domain move, not a staging &lt;-&gt; production sync tool. It does not support the source and target having different credentials, and it does not merge or preserve the target site's own settings -- it's the same full restore described above, just with URL rewriting confirmed. If the new domain lands in a subdirectory (e.g. `example.com` to `example.com/blog`) that's supported too; moving between two paths on the *same* host (no domain change at all) is refused outright rather than risk a partial migration, since that specific shape isn't safe to retry if a restore is interrupted partway through.
 
@@ -189,6 +189,9 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.7.1 =
+Moved the Migrate explainer out of its own dedicated nav tab and into a new section under the Advanced tab. The tab added no functionality of its own beyond checking the existing "this backup is from a different site" box and jumping back to Home -- it didn't warrant a dedicated top-level tab by itself. Same explanatory text, same non-goals notice, same button and behavior; purely a navigation change, no backend logic touched.
 
 = 2.7.0 =
 Added a dedicated Migrate tab that walks through moving this site to a new domain, step by step, and makes clear what it is and isn't: a one-time domain move (not a staging &lt;-&gt; production sync tool), with the same credentials and settings carried over exactly, only the domain changing.
