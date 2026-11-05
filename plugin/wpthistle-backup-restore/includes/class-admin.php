@@ -1355,7 +1355,9 @@ class Admin {
 			</p>
 			</div>
 			<div id="wpthistle_backup_tab_advanced" class="wpthistle-backup-tab-panel" style="display:none;">
-			<h2><?php esc_html_e( 'Migrate to a new domain', 'wpthistle-backup-restore' ); ?></h2>
+			<h2><?php esc_html_e( 'Advanced', 'wpthistle-backup-restore' ); ?></h2>
+
+			<h3><?php esc_html_e( 'Migrate to a new domain', 'wpthistle-backup-restore' ); ?></h3>
 			<p class="description"><?php esc_html_e( 'A simple, same-site domain move: take a backup already made on the OLD site, then restore it here, on the NEW site. Every URL in the backup (post content, widget settings, and everywhere else WordPress stores one) is rewritten to this site\'s own domain before anything is restored live. Everything else -- content, users, credentials, settings -- carries over exactly as it was.', 'wpthistle-backup-restore' ); ?></p>
 			<div class="notice notice-info inline" style="margin:0 0 16px;padding:8px 12px;">
 				<p style="margin:0.5em 0;"><strong><?php esc_html_e( 'What this is not:', 'wpthistle-backup-restore' ); ?></strong> <?php esc_html_e( 'this is a one-time domain move, not a staging <-> production sync tool. It does not support the source and target having different credentials, does not merge or preserve the target\'s own settings, and overwrites this site\'s content and database in place -- the same full restore the Home tab performs, just with URL rewriting confirmed.', 'wpthistle-backup-restore' ); ?></p>
@@ -1367,9 +1369,7 @@ class Admin {
 			</ol>
 			<p><button type="button" class="button button-primary" id="wpthistle_backup_migrate_go"><?php esc_html_e( 'Start migration in Restore', 'wpthistle-backup-restore' ); ?></button></p>
 
-			<hr style="margin:24px 0;">
-
-			<h2><?php esc_html_e( 'Guaranteed scheduling (optional, advanced)', 'wpthistle-backup-restore' ); ?></h2>
+			<h3><?php esc_html_e( 'Guaranteed scheduling (optional, advanced)', 'wpthistle-backup-restore' ); ?></h3>
 			<p class="description">
 				<?php esc_html_e( 'The schedule above runs on whichever request reaches this site first on a selected day, and now also self-advances once started (no longer needing further site traffic to finish) -- in practice this covers almost every site. The one remaining edge case: a site with truly zero requests of any kind for an entire selected day. For that, an outside scheduler can visit this URL periodically instead:', 'wpthistle-backup-restore' ); ?>
 			</p>

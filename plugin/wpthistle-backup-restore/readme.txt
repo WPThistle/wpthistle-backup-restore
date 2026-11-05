@@ -195,6 +195,8 @@ Moved the Migrate explainer out of its own dedicated nav tab and into a new sect
 
 Simplified the migration checkbox on the Home tab itself: the long inline explanation (what checking it rewrites, the non-goals) is now just on the Advanced tab's Migrate section, with the Home tab pointing there instead of repeating it. The checkbox and its core behavior are unchanged.
 
+Brought the Advanced tab's heading structure in line with the Notifications tab's pattern: one "Advanced" heading for the tab, with "Migrate to a new domain" and "Guaranteed scheduling" as subsections underneath it, instead of two equal-weight headings separated by a divider. Text and behavior unchanged.
+
 = 2.7.0 =
 Added a dedicated Migrate tab that walks through moving this site to a new domain, step by step, and makes clear what it is and isn't: a one-time domain move (not a staging &lt;-&gt; production sync tool), with the same credentials and settings carried over exactly, only the domain changing.
 

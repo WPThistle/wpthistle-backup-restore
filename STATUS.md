@@ -69,6 +69,17 @@ release rather than new feature work:
   Playwright check confirms the new label/help text render correctly
   and the checkbox still works.
 
+- **the owner's second follow-up: bring the Advanced tab's heading
+  structure in line with the other tabs.** Flagged during the same UI
+  pass: Advanced had two equal-weight `<h2>` sections ("Migrate to a
+  new domain", "Guaranteed scheduling") separated by an `<hr>`, while
+  Notifications uses one `<h2>` with `<h3>` subsections underneath.
+  Fixed: Advanced now has a single `<h2>Advanced</h2>` with both
+  sections demoted to `<h3>`, matching Notifications' pattern. Text
+  and behavior unchanged. `php -l` clean, 262/262 unit tests, live
+  Playwright check confirms exactly one h2/two h3s and the Migrate
+  button still works.
+
 Plugin version bumped 2.7.0 -> 2.7.1 (readme.txt changelog entry
 added; `Version:`/`WPTHISTLE_BACKUP_VERSION` bumped). Not yet tagged or
 released -- same pattern as the 2.7.0 round, stopping for the owner's
