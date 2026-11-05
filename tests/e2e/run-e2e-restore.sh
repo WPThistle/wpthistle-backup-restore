@@ -15,11 +15,11 @@
 # freshly re-provisioned (wp core install) by every test that touches
 # it, so it is the only safe target for a real in-place restore test.
 #
-# NC_TEST_* credentials were revoked 2026-11-04 (the cloud.tomcat.casa
-# test account was shut down) and removed from secrets.env. This script
-# cannot run until re-enabled: Holt requests a fresh test account from
-# the owner, who provisions it and provides new NC_TEST_HOST/NC_TEST_USER/
-# NC_TEST_APP_PASSWORD values to add back to secrets.env.
+# Internal-only drill, not part of the public test suite (see
+# CONTRIBUTING.md) -- requires a standing team-owned cloud.tomcat.casa
+# test account's NC_TEST_* credentials in a local secrets.env that is
+# never committed to this repo. That account was revoked 2026-11-04;
+# the team re-provisions a new one internally before running this again.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOCKER_DIR="$ROOT/docker"
@@ -35,8 +35,8 @@ NC_TEST_HOST=$(grep '^NC_TEST_HOST=' "$SECRETS" | cut -d= -f2-)
 NC_TEST_USER=$(grep '^NC_TEST_USER=' "$SECRETS" | cut -d= -f2-)
 NC_TEST_APP_PASSWORD=$(grep '^NC_TEST_APP_PASSWORD=' "$SECRETS" | cut -d= -f2-)
 if [ -z "$NC_TEST_HOST" ] || [ -z "$NC_TEST_USER" ] || [ -z "$NC_TEST_APP_PASSWORD" ]; then
-  echo "FAIL: NC_TEST_* credentials not set in $SECRETS -- test account was revoked 2026-11-04." >&2
-  echo "Ask the owner to provision a fresh cloud.tomcat.casa test account and add new NC_TEST_HOST/NC_TEST_USER/NC_TEST_APP_PASSWORD values." >&2
+  echo "FAIL: NC_TEST_* credentials not set in $SECRETS." >&2
+  echo "This is an internal-only drill requiring a team-owned test account -- see CONTRIBUTING.md." >&2
   exit 1
 fi
 
