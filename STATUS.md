@@ -1,5 +1,17 @@
 # STATUS — WPThistle Backup and Restore plugin (formerly WPGuard Nextcloud Backup, see 2.0.0 entry)
 
+## 2.8.0 — Notifications identify site by URL; "View details" link fixed, 2026-11-05
+
+Two changes, both owner-reported.
+
+**Notifications now identify the site by URL, not WP Title.** The owner runs two cloned sites sharing the same Title, differing only by domain — every channel's alert looked identical regardless of which site it was about. `Notifications::dispatch_all()`/`dispatch_test()` used to read `get_option('blogname')` directly; both now call a new `site_identifier()` method that returns the host from `wp_parse_url(home_url(), PHP_URL_HOST)`, falling back to blogname only if host parsing somehow fails. Flows through the same per-channel builders/escaping as before (HTML-escaped in the email body, JSON-encoded for Discord/Slack/Pushbullet/ntfy/Gotify/webhook, plain-text for Telegram/Pushover) — no new injection surface, confirmed by audit.
+
+**Real bug found and fixed: the Plugins-list "View details" link (and the FAQ it opens) was disappearing whenever the site was already up to date — which is most of the time, including right now.** Root cause: `Update_Checker::check_for_update()` only ever wrote `$transient->response[...]` (update available); WordPress core (since 5.5) only renders "View details" for a plugin present in `response` OR `no_update`, and this plugin never wrote the latter. Fixed: when a trusted release is found but isn't newer, the method now writes a `no_update` entry (current version, no package, same icon/url as the `response` item would carry). Also unset any pre-existing `no_update[$basename]` at the top of the method, mirroring the existing H-001 `response` strip, so a WordPress.org-sourced entry for this plugin's still-unclaimed slug can't survive in the second array either. New E2E coverage: `run-e2e-update-checker.sh` Cases N (no_update populated when current) and O (squatter no_update entry stripped), both passing live against the real repo.
+
+Vex audit (SOP-023): **CLEAR TO SHIP**, no findings on either change. Two informational notes, non-blocking: (1) the auto-update toggle on the Plugins screen is now visible even when no update is pending, since the plugin now always appears in one of the two arrays once a trusted release is known — auto-update execution itself is unaffected, still gated by the same package-trust check; (2) `PHP_URL_HOST` doesn't distinguish by port or subdirectory path, so two installs on the same host differing only by port or subdirectory would still show the same identifier — not the owner's actual case (separate domains), noted for future reference.
+
+Full unit suite green (252/252 relevant — 10 `ZipArchive`-extension failures were an artifact of the disposable lint container used mid-session, not a real regression), `tests/e2e/run-e2e-notifications.sh` and `tests/e2e/run-e2e-update-checker.sh` both fully green.
+
 ## 2.7.1 — Migrate tab folded into Advanced; live subdirectory-migration E2E coverage, 2026-11-04
 
 v2.7.0 shipped (tagged, GitHub Release published, CI green). Two

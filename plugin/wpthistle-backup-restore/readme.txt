@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.7.1
+Stable tag: 2.8.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -189,6 +189,13 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.8.0 =
+Scheduled-backup notifications (email, Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, generic webhook) now identify the site by its URL instead of its WordPress site Title. If you run two sites with the same Title and different domains, you can now tell which one a notification is about.
+
+Fixed a real bug: the "View details" link on this plugin's row on the Plugins screen was disappearing whenever the site was already on the latest version -- which is most of the time. WordPress only shows that link when the plugin reports either an available update or confirmation it's current; this plugin was only ever reporting the former. Now reports both, so the link (and the FAQ/details popup it opens) stays available regardless of update status.
+
+Reviewed by a security audit before release: no findings. The update-checker fix re-verifies and extends an existing protection (a WordPress.org-sourced entry for this plugin's still-unclaimed slug must never be trusted) to the second data path it now also writes to.
 
 = 2.7.1 =
 Moved the Migrate explainer out of its own dedicated nav tab and into a new section under the Advanced tab. The tab added no functionality of its own beyond checking the existing "this backup is from a different site" box and jumping back to Home -- it didn't warrant a dedicated top-level tab by itself. Same explanatory text, same non-goals notice, same button and behavior; purely a navigation change, no backend logic touched.

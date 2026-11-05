@@ -162,6 +162,49 @@ RESULT_G=$(wp_source eval "
 echo "OK  path-traversal package URL correctly never offered, even though cached"
 
 echo
+echo "=== Case N (2026-11-05): a same-or-older cached release must still populate no_update, or WP core's Plugins-list 'View details' link silently disappears ==="
+wp_source eval "
+  set_transient('wpthistle_backup_update_check', array(
+    'version' => '1.0.0',
+    'package' => 'https://github.com/WPThistle/wpthistle-backup-restore/releases/download/v1.0.0/wpthistle-backup-restore-1.0.0.zip',
+    'body' => '',
+    'html_url' => 'https://github.com/WPThistle/wpthistle-backup-restore/releases/tag/v1.0.0',
+  ), 12 * HOUR_IN_SECONDS);
+" > /dev/null
+RESULT_N=$(wp_source eval "
+  \$checker = new \WPThistle\BackupRestore\Update_Checker('$PLUGIN_BASENAME');
+  \$transient = (object) array('checked' => array('$PLUGIN_BASENAME' => '1.0.0'));
+  \$transient = \$checker->check_for_update(\$transient);
+  if ( ! isset(\$transient->no_update['$PLUGIN_BASENAME']) ) { echo 'missing'; exit; }
+  \$item = \$transient->no_update['$PLUGIN_BASENAME'];
+  echo (\$item->new_version === WPTHISTLE_BACKUP_VERSION && '' === \$item->package) ? 'present' : 'wrong-shape';
+")
+[ "$RESULT_N" = "present" ] || { echo "FAIL: an up-to-date install must get a no_update entry (current version, no package) so 'View details' still renders; got '$RESULT_N'"; exit 1; }
+echo "OK  up-to-date install gets a no_update entry, 'View details' link keeps rendering"
+
+echo
+echo "=== Case O (H-001, extended to no_update): a WP.org-sourced no_update entry already in the transient must be stripped too ==="
+wp_source eval "
+  delete_transient('wpthistle_backup_update_check');
+  set_transient('wpthistle_backup_update_check', array(), HOUR_IN_SECONDS);
+" > /dev/null
+RESULT_O=$(wp_source eval "
+  \$checker = new \WPThistle\BackupRestore\Update_Checker('$PLUGIN_BASENAME');
+  \$transient = (object) array('checked' => array('$PLUGIN_BASENAME' => '1.0.0'));
+  \$transient->no_update['$PLUGIN_BASENAME'] = (object) array(
+    'new_version' => '1.0.0',
+    'package'     => '',
+    'slug'        => 'wpthistle-backup-restore',
+    'plugin'      => '$PLUGIN_BASENAME',
+    'url'         => 'https://wordpress.org/plugins/wpthistle-backup-restore/',
+  );
+  \$transient = \$checker->check_for_update(\$transient);
+  echo (isset(\$transient->no_update['$PLUGIN_BASENAME']) && 'https://wordpress.org/plugins/wpthistle-backup-restore/' === \$transient->no_update['$PLUGIN_BASENAME']->url) ? 'survived' : 'stripped-or-replaced';
+")
+[ "$RESULT_O" != "survived" ] || { echo "FAIL: a pre-existing WP.org-sourced no_update entry must never survive untouched, got '$RESULT_O'"; exit 1; }
+echo "OK  pre-existing WP.org-sourced no_update entry is stripped/replaced, never passed through untouched"
+
+echo
 echo "=== Cleanup: clear the cached release so the live site is left pointed at reality again ==="
 wp_source eval "delete_transient('wpthistle_backup_update_check');" > /dev/null
 

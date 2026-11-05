@@ -619,7 +619,7 @@ class Notifications {
 	 * @return array<string, true|string> Channel => true, or a short safe-to-display/log failure reason.
 	 */
 	public static function dispatch_all( array $job ): array {
-		$site_name    = wp_specialchars_decode( get_option( 'blogname' ), ENT_QUOTES );
+		$site_name    = self::site_identifier();
 		$settings_url = admin_url( 'admin.php?page=wpthistle-backup-restore' );
 		$text         = self::build_alert_text( $job, $site_name, $settings_url );
 		return self::send_to_every_enabled_channel( $job, $site_name, $text );
@@ -682,10 +682,23 @@ class Notifications {
 	 * @return array<string, true|string>
 	 */
 	public static function dispatch_test(): array {
-		$site_name = wp_specialchars_decode( get_option( 'blogname' ), ENT_QUOTES );
+		$site_name = self::site_identifier();
 		$job       = array( 'status' => 'test', 'backup_id' => 'TEST', 'updated_at' => gmdate( 'Y-m-d H:i:s' ) );
 		$text      = self::build_test_text( $site_name );
 		return self::send_to_every_enabled_channel( $job, $site_name, $text );
+	}
+
+	/**
+	 * 2026-11-05: notifications used to identify the site by its WP Title
+	 * (blogname), ambiguous when two sites share a Title and differ only
+	 * by URL (e.g. a clone). The host is what actually disambiguates them.
+	 */
+	private static function site_identifier(): string {
+		$host = wp_parse_url( home_url(), PHP_URL_HOST );
+		if ( is_string( $host ) && '' !== $host ) {
+			return $host;
+		}
+		return wp_specialchars_decode( get_option( 'blogname' ), ENT_QUOTES );
 	}
 
 	/** @return array<string, true|string> */

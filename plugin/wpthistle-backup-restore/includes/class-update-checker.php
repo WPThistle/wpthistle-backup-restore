@@ -248,25 +248,47 @@ class Update_Checker {
 		// can ever survive under our basename regardless of whether a
 		// given WP version/host honors the header.
 		unset( $transient->response[ $this->plugin_basename ] );
+		// Same H-001 reasoning applies to no_update: a squatter's WP.org
+		// entry landing here instead of in response would still drive
+		// the Plugins-list "View details" link to their page, not ours.
+		unset( $transient->no_update[ $this->plugin_basename ] );
 
 		$release = $this->fetch_latest_release();
 		if ( ! $release || empty( $release['package'] ) || ! self::is_trusted_package_url( $release['package'] ) ) {
 			return $transient;
 		}
-		if ( ! self::is_newer_version( $release['version'], WPTHISTLE_BACKUP_VERSION ) ) {
+
+		if ( self::is_newer_version( $release['version'], WPTHISTLE_BACKUP_VERSION ) ) {
+			$item               = new \stdClass();
+			$item->slug         = self::SLUG;
+			$item->plugin       = $this->plugin_basename;
+			$item->new_version  = $release['version'];
+			$item->url          = $release['html_url'];
+			$item->package      = $release['package'];
+			$item->requires_php = '8.1';
+			$item->icons        = self::icons();
+
+			$transient->response[ $this->plugin_basename ] = $item;
 			return $transient;
 		}
 
+		// 2026-11-05: WP core's Plugins-list "View details" link only
+		// renders for a plugin present in this transient's response OR
+		// no_update array (core change since WP 5.5) -- this plugin isn't
+		// on WordPress.org, so without a no_update entry here, the link
+		// silently disappears the moment the site is up to date, which is
+		// most of the time. Mirrors the response item's shape, current
+		// version instead of a new one, no package (nothing to install).
 		$item               = new \stdClass();
 		$item->slug         = self::SLUG;
 		$item->plugin       = $this->plugin_basename;
-		$item->new_version  = $release['version'];
+		$item->new_version  = WPTHISTLE_BACKUP_VERSION;
 		$item->url          = $release['html_url'];
-		$item->package      = $release['package'];
+		$item->package      = '';
 		$item->requires_php = '8.1';
 		$item->icons        = self::icons();
 
-		$transient->response[ $this->plugin_basename ] = $item;
+		$transient->no_update[ $this->plugin_basename ] = $item;
 		return $transient;
 	}
 
