@@ -73,6 +73,7 @@ class Admin {
 
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'add_menu' ) );
+		add_action( 'current_screen', array( $this, 'maybe_filter_dock_notices' ) );
 		add_filter( self::STATUS_CARDS_FILTER, array( $this, 'add_own_status_card' ) );
 		add_action( 'wp_ajax_wpthistle_backup_save_settings', array( $this, 'ajax_save_settings' ) );
 		add_action( 'wp_ajax_wpthistle_backup_test_connection', array( $this, 'ajax_test_connection' ) );
@@ -313,6 +314,155 @@ class Admin {
 			</p>
 		</div>
 		<?php
+	}
+
+	/**
+	 * 2026-11-06: other plugins' promotional/upsell admin notices render
+	 * on every admin page, including the WPThistle Dock (they hook the
+	 * global 'admin_notices'/'all_admin_notices' actions, not a specific
+	 * screen) -- the owner doesn't want a nag for an unrelated plugin's
+	 * paid tier showing up next to the WPThistle brand. Scoped to just
+	 * this one screen (never touches any other admin page, including
+	 * this plugin's own settings page) so core/security/PHP-version
+	 * nags elsewhere are completely unaffected.
+	 */
+	public function maybe_filter_dock_notices( $screen ): void {
+		if ( ! isset( $screen->id ) || 'toplevel_page_' . self::FAMILY_PARENT_SLUG !== $screen->id ) {
+			return;
+		}
+		// Security audit (Vex, 2026-11-06) INFO: core's own recovery-mode
+		// nag (wp_recovery_mode_nag(), shown when a plugin fatally errored)
+		// carries 'notice-info', not a class this filter treats as
+		// important -- don't even try to filter this page while recovery
+		// mode is active, so that nag is never at risk of being dropped.
+		if ( function_exists( 'wp_is_recovery_mode' ) && wp_is_recovery_mode() ) {
+			return;
+		}
+		// Confirmed live against the real wp-admin render: 'in_admin_header'
+		// fires before <div id="wpbody-content">/<div id="screen-meta">
+		// open, so starting the buffer there captures those unclosed
+		// wrapper divs too -- DOMDocument then nests the real notices
+		// several levels inside that wrapper instead of as direct children
+		// of our wrap element, and the filter silently drops everything,
+		// including real warnings/errors. 'admin_notices' is the earliest
+		// point that's still clean (no open structural markup in between
+		// it and 'all_admin_notices' -- verified by dumping the raw
+		// buffer), so the window opens there instead. PHP_INT_MIN on the
+		// start side beats any other callback's priority on this hook,
+		// so nothing can render before buffering begins.
+		add_action( 'admin_notices', array( $this, 'start_notice_buffer' ), PHP_INT_MIN );
+		add_action( 'all_admin_notices', array( $this, 'end_notice_buffer' ), PHP_INT_MAX );
+	}
+
+	/** @var int set by start_notice_buffer(), checked by end_notice_buffer() */
+	private $notice_buffer_level = 0;
+
+	public function start_notice_buffer(): void {
+		ob_start();
+		$this->notice_buffer_level = ob_get_level();
+	}
+
+	/**
+	 * Drops only notices that look like promotional/info/success banners
+	 * (WP's own 'notice-info'/'notice-success'/'updated' classes -- what
+	 * an upsell nag virtually always carries), keeping everything else by
+	 * default -- including anything with no recognized class at all (a
+	 * raw PHP warning/deprecation notice echoed with no wrapping markup,
+	 * for instance, has no class to match anything against). This is
+	 * deliberately the inverse of an allowlist: the owner's hard
+	 * requirement is that a real warning/error is never silently dropped,
+	 * so the default for anything unrecognized is to keep it, even at the
+	 * cost of letting an occasional unrecognized nag through.
+	 *
+	 * Security audit (Vex, 2026-11-06) MEDIUM-DOCK-01: an earlier
+	 * allowlist version (keep only notice-error/notice-warning/etc.,
+	 * drop everything else) silently dropped a real warning/error
+	 * whenever malformed markup from some other notice (an unclosed div,
+	 * a stray closing tag) caused DOMDocument's HTML-repair to nest the
+	 * real notice somewhere other than a direct child of the wrap
+	 * element -- neither fail-open guard in this method catches "parsed
+	 * fine, but restructured the tree." Fixed by flipping to a drop-list
+	 * (narrows what this code is confident enough to remove) plus the
+	 * whole-document safety-net scan below (catches a real notice ending
+	 * up anywhere else in the parsed tree, drop-list or not, and bails
+	 * out entirely rather than risk it).
+	 *
+	 * Fails open (returns the original, unfiltered $html) on any parse
+	 * trouble, or if a real warning/error-classed element turns up
+	 * anywhere in the parsed document other than as a direct child of
+	 * the wrap element -- malformed input has restructured or escaped
+	 * the markup in a way this filter can't reason about safely, so
+	 * nothing gets filtered rather than risk it.
+	 */
+	public function end_notice_buffer(): void {
+		if ( ob_get_level() !== $this->notice_buffer_level ) {
+			return;
+		}
+		$html = ob_get_clean();
+		echo self::keep_important_notices( (string) $html );
+	}
+
+	private const IMPORTANT_CLASS_PATTERN   = '/\b(error|notice-error|notice-warning|update-nag|update-message)\b/';
+	private const PROMOTIONAL_CLASS_PATTERN = '/\b(notice-info|notice-success|updated)\b/';
+
+	public static function keep_important_notices( string $html ): string {
+		if ( '' === trim( $html ) || ! class_exists( '\\DOMDocument' ) ) {
+			return $html;
+		}
+		$doc              = new \DOMDocument();
+		$prev_use_errors  = libxml_use_internal_errors( true );
+		$loaded           = $doc->loadHTML( '<?xml encoding="utf-8"?><div id="wpthistle-notice-wrap">' . $html . '</div>' );
+		libxml_clear_errors();
+		libxml_use_internal_errors( $prev_use_errors );
+		$wrap = $loaded ? $doc->getElementById( 'wpthistle-notice-wrap' ) : null;
+		if ( null === $wrap ) {
+			return $html;
+		}
+
+		// Safety net: a real warning/error must end up as a direct child of
+		// $wrap for this method to have any chance of keeping it. If one
+		// turns up anywhere else in the parsed document (nested inside
+		// another element's malformed markup, or pushed outside $wrap
+		// entirely by a stray closing tag), this filter has lost track of
+		// it -- bail out of filtering altogether for this buffer.
+		foreach ( $doc->getElementsByTagName( '*' ) as $node ) {
+			if ( $node instanceof \DOMElement
+				&& preg_match( self::IMPORTANT_CLASS_PATTERN, $node->getAttribute( 'class' ) )
+				&& $node->parentNode !== $wrap
+			) {
+				return $html;
+			}
+		}
+
+		$kept = '';
+		foreach ( $wrap->childNodes as $node ) {
+			if ( ! ( $node instanceof \DOMElement ) ) {
+				// Text/comment direct children (stray whitespace, or a raw
+				// PHP warning with no wrapping element at all) carry no
+				// class to judge -- keep them rather than guess.
+				$kept .= $doc->saveHTML( $node );
+				continue;
+			}
+			$class = $node->getAttribute( 'class' );
+			if ( preg_match( self::PROMOTIONAL_CLASS_PATTERN, $class ) && ! preg_match( self::IMPORTANT_CLASS_PATTERN, $class ) ) {
+				// A promotional-classed element is only safe to drop
+				// outright if nothing important is nested inside it (a
+				// malformed/nested upsell notice could otherwise take a
+				// real error down with it -- MEDIUM-DOCK-01).
+				$has_important_descendant = false;
+				foreach ( $node->getElementsByTagName( '*' ) as $descendant ) {
+					if ( $descendant instanceof \DOMElement && preg_match( self::IMPORTANT_CLASS_PATTERN, $descendant->getAttribute( 'class' ) ) ) {
+						$has_important_descendant = true;
+						break;
+					}
+				}
+				if ( ! $has_important_descendant ) {
+					continue;
+				}
+			}
+			$kept .= $doc->saveHTML( $node );
+		}
+		return $kept;
 	}
 
 	/**

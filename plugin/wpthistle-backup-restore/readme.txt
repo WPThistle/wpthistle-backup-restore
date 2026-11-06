@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.8.0
+Stable tag: 2.9.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -189,6 +189,11 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.9.0 =
+The WPThistle Dock page (the shared landing page across every WPThistle plugin) no longer shows promotional "upgrade to Pro" banners from unrelated third-party plugins. WordPress's notice hooks are global, so any installed plugin's upsell nag could render on this page alongside the WPThistle brand -- now filtered out, on this one page only. Real warnings and errors, including WordPress core's own update/PHP-end-of-life nags, are never affected: this only drops recognizably promotional notices, and keeps anything it isn't confident about rather than risk hiding something that matters. Every other admin page, including this plugin's own settings page, is completely unaffected.
+
+Reviewed by a security audit before release: one real finding, fixed before shipping -- an edge case in malformed notice markup from another plugin could have caused this page to drop a real warning or error along with the intended banner. Closed by re-checking the whole page's structure before dropping anything, and re-verified live.
 
 = 2.8.0 =
 Scheduled-backup notifications (email, Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, generic webhook) now identify the site by its URL instead of its WordPress site Title. If you run two sites with the same Title and different domains, you can now tell which one a notification is about.

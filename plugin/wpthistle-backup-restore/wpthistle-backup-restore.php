@@ -4,7 +4,7 @@
  * Plugin URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Update URI:        https://github.com/WPThistle/wpthistle-backup-restore
  * Description:       Creates recoverable backups of this WordPress site (files + database) and transfers them to a user-controlled Nextcloud, ownCloud, or OpenCloud server over authenticated HTTPS WebDAV -- or packages them straight to your browser with zero cloud dependency. Manual or scheduled backups, retention pruning, and one-click in-place restore from either a configured server destination or an uploaded backup bundle.
- * Version:           2.8.0
+ * Version:           2.9.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            WPThistle project
@@ -57,7 +57,7 @@ define( 'WPTHISTLE_BACKUP_RESTORE_BOOTSTRAPPED', __FILE__ );
 // still fatals with "Cannot redeclare function ...".
 if ( true ) {
 
-define( 'WPTHISTLE_BACKUP_VERSION', '2.8.0' );
+define( 'WPTHISTLE_BACKUP_VERSION', '2.9.0' );
 // Phase 2 (incremental backups): bumped 1 -> 2. Every manifest this
 // plugin writes from here on -- full or incremental alike -- carries
 // new backup_mode/base_backup_id/parent_backup_id/files fields.
