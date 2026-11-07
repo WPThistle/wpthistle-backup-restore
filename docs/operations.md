@@ -695,8 +695,15 @@ uploading again.
 
 ## Disk space
 
-No preflight disk-space check ships (NFR-10 mentions it; still deferred).
-A failed export due to disk exhaustion surfaces as a `failed` job with a
-redacted PHP warning in the log, not a clean "out of disk" message yet —
-known gap, not a silent-success risk (the job still correctly fails
-rather than reporting success).
+Partial preflight coverage, not the blanket gap this section once said
+(NFR-10). `step_bundle_local()` (Download Now) and
+`Restore_Orchestrator`'s restore-preflight both call `disk_free_space()`
+and fail with a clear "not enough free disk space" message before
+writing anything further. The gap is narrower: a backup's own
+`step_export_db()`/`step_export_files()` (writing `database.sql.gz`/
+`files.part-NNNN.zip` to a local temp dir before upload, on *every*
+destination including a cloud one) still has no preflight check. A
+failed export due to disk exhaustion there surfaces as a `failed` job
+with a redacted PHP warning in the log, not a clean "out of disk"
+message — known gap, not a silent-success risk (the job still correctly
+fails rather than reporting success).
