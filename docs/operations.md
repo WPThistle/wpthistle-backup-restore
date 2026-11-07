@@ -1,4 +1,4 @@
-# Operations (MVP)
+# Operations
 
 ## Running a backup
 
@@ -83,10 +83,10 @@ is only reached in `step_finalize()` after `COMPLETE.json` round-trips.
 ## Finding a backup on Nextcloud
 
 `/<configured-folder>/<site-id>/backups/<backup-id>/` — site-id is shown
-nowhere in the UI yet in this MVP (gap — the admin page should display it;
-tracked as a follow-up, not a release blocker since the manual restore
-runbook's `curl`/WebDAV-client approach still works if you browse the
-configured folder directly in Nextcloud's web UI).
+nowhere in the UI (gap — the admin page should display it; tracked as a
+follow-up, not a release blocker since the manual restore runbook's
+`curl`/WebDAV-client approach still works if you browse the configured
+folder directly in Nextcloud's web UI).
 
 ## Transport (ADR 0004, ADR 0010)
 
@@ -695,7 +695,7 @@ uploading again.
 
 ## Disk space
 
-No preflight disk-space check ships in MVP (NFR-10 mentions it; deferred).
+No preflight disk-space check ships (NFR-10 mentions it; still deferred).
 A failed export due to disk exhaustion surfaces as a `failed` job with a
 redacted PHP warning in the log, not a clean "out of disk" message yet —
 known gap, not a silent-success risk (the job still correctly fails

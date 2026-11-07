@@ -7,26 +7,30 @@
 [![CI](https://github.com/WPThistle/wpthistle-backup-restore/actions/workflows/ci.yml/badge.svg)](https://github.com/WPThistle/wpthistle-backup-restore/actions/workflows/ci.yml)
 
 A WordPress plugin that backs up your site's database and files to a
-Nextcloud server you control, over authenticated HTTPS WebDAV — with
-read-back SHA-256 verification on every component before anything is
-ever reported as a successful backup.
+Nextcloud, ownCloud, or OpenCloud server you control over authenticated
+HTTPS WebDAV — or straight to your browser with "Download Now," zero
+cloud dependency — with read-back SHA-256 verification on every
+component before anything is ever reported as a successful backup.
 
-**Status:** v2.7.1. Manual or scheduled backups, retention pruning,
+**Status:** v2.9.1. Manual or scheduled backups, retention pruning,
 incremental file backups, multi-backend support (Nextcloud, ownCloud,
-OpenCloud), one-click in-place restore (from either the configured
-destination or an uploaded backup bundle), and a Migrate section
-(Advanced tab) for restoring an existing backup onto a new domain with
-every URL it contains rewritten to match. Every feature has gone through independent
-security audit, fixes, and re-verification before shipping — see
-`docs/threat-model.md` and `STATUS.md` for the full history (`CHANGELOG.md`
-is frozen at 2.0.0; `readme.txt` and `STATUS.md` carry every release since).
-Multisite is not yet supported (backlogged — see `STATUS.md`).
+OpenCloud, or local download), one-click in-place restore (from either
+the configured destination or an uploaded backup bundle), a Migrate
+section (Advanced tab) for restoring an existing backup onto a new
+domain with every URL it contains rewritten to match, failure/success
+notifications across email and eight other channels, and WP-CLI
+support for running backups, checking status, and restoring. Every
+feature has gone through independent security audit, fixes, and
+re-verification before shipping — see `docs/threat-model.md` and
+`STATUS.md` for the full history (`CHANGELOG.md` is frozen at 2.0.0;
+`readme.txt` and `STATUS.md` carry every release since).
+Multisite is not supported (not a planned feature — see `STATUS.md`).
 
 ## Why this exists
 
 Most WordPress-to-cloud backup plugins ask you to trust that a backup
 succeeded. This plugin never reports success until it has independently
-read every uploaded component back from Nextcloud and verified its
+read every uploaded component back from storage and verified its
 SHA-256 checksum against the one recorded at archive time, with a final
 completion marker uploaded and verified last. See `docs/requirements.md`
 for the full design rationale and `docs/threat-model.md` for the
@@ -35,11 +39,13 @@ security model.
 ## Features
 
 - Manual or scheduled (daily/weekly) backup of the WordPress database
-  and `wp-content` to a self-hosted or any Nextcloud instance you
-  control, with retention pruning and opt-in incremental file backups.
+  and `wp-content` to a self-hosted Nextcloud, ownCloud, or OpenCloud
+  instance you control, or straight to your browser via "Download Now"
+  with zero cloud dependency, with retention pruning and opt-in
+  incremental file backups.
 - Authenticated HTTPS WebDAV transport — no plaintext credentials, no
   TLS verification bypass; supports a custom CA bundle for self-signed
-  or private-CA Nextcloud deployments.
+  or private-CA deployments.
 - Read-back checksum verification of every uploaded component before a
   backup is ever marked complete.
 - Versioned manifest format (`docs/backup-format.md`) for forward
@@ -48,26 +54,31 @@ security model.
   checkpoints its progress and can resume rather than restart after an
   interruption, including automatic stale-lock recovery and a WP-Cron
   fallback so a closed browser tab doesn't strand a job.
-- One-click in-place restore, from either the configured Nextcloud
-  destination or an uploaded backup bundle. A **Migrate** section
+- One-click in-place restore, from either the configured destination
+  or an uploaded backup bundle. A **Migrate** section
   under the Advanced tab walks through restoring an existing backup
   onto a new domain, rewriting every URL it contains (including
   inside PHP-serialized data) to the new site's own address — same
   domain, same everything else (credentials included); not a
   staging-to-production credential migration — see `docs/operations.md`.
+- Failure/success notifications across email, Discord, Slack,
+  Pushover, Pushbullet, ntfy, Gotify, Telegram, or a generic webhook.
 - Self-hosted update feed via GitHub Releases — no wordpress.org
   listing required.
-- Admin UI with live job status/log, plus a WP-CLI command
-  (`wp wpthistle-backup-restore run` / `status`).
+- Admin UI with live job status/log, plus WP-CLI commands
+  (`wp wpthistle-backup-restore run` / `status` / `restore` /
+  `restore_local`).
 
 ## Requirements
 
 - WordPress 6.4+, PHP 8.1+.
-- A Nextcloud server reachable over HTTPS with a valid certificate (or
-  a private CA whose bundle you supply).
-- A dedicated, non-admin Nextcloud account with an app password
-  generated under Personal Settings > Security. Do not use your main
-  Nextcloud account's password.
+- To use "Download Now": nothing else — the backup goes straight to
+  your browser.
+- To back up to a Nextcloud, ownCloud, or OpenCloud destination: that
+  server reachable over HTTPS with a valid certificate (or a private
+  CA whose bundle you supply), plus a dedicated, non-admin account
+  with an app password generated under Personal Settings > Security
+  on that server. Do not use your main account's password.
 
 ## Installation
 
@@ -75,12 +86,14 @@ security model.
    `docker/scripts/package.ps1`.
 2. Upload and activate the plugin in WordPress.
 3. Go to **WPThistle > Backup and Restore**.
-4. Enter your Nextcloud URL, the dedicated account's username, its app
-   password, and a destination folder.
-5. Click **Test Connection**, then **Back Up Now**.
+4. To back up to a Nextcloud, ownCloud, or OpenCloud destination:
+   enter its URL, the dedicated account's username, its app password,
+   and a destination folder, then click **Test Connection**. Skip this
+   step to use "Download Now" instead.
+5. Click **Back Up Now**.
 
 Restoring is one-click from the same settings page, from either the
-configured Nextcloud destination or an uploaded backup bundle — check
+configured destination or an uploaded backup bundle — check
 "this backup is from a different site" if the backup came from
 somewhere other than this exact site/domain, which also migrates every
 URL it contains to this site's own address. See

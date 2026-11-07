@@ -5,7 +5,7 @@ Tags: backup, restore, nextcloud, webdav, disaster-recovery
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 2.9.0
+Stable tag: 2.9.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,22 +13,19 @@ Backs up your WordPress files and database to a Nextcloud, ownCloud, or OpenClou
 
 == Description ==
 
-Phase 1 MVP, security-audited and verified against real production data: manual, on-demand backups only. No scheduling, no retention/pruning, no one-click restore yet — see docs/restore-manual.md in the source repository for the manual disaster-recovery procedure, which is the only restore path in this release.
-
-A backup is never reported successful until every uploaded component has been read back from Nextcloud and its SHA-256 checksum verified, and a final completion marker has itself been uploaded and verified.
+Back up your WordPress files and database to a Nextcloud, ownCloud, or OpenCloud server you control -- or straight to your browser with "Download Now," zero cloud dependency -- on-demand or on a schedule, with retention pruning, incremental file backups, and one-click in-place restore from either your configured destination or an uploaded bundle. Supports domain migration (restore an old backup onto a new domain with every stored URL rewritten to match), failure/success notifications across email, Discord, Slack, Pushover, Pushbullet, ntfy, Gotify, Telegram, or a generic webhook, and WP-CLI support for running backups, checking status, and restoring. Every backup is independently verified: nothing is reported successful until each uploaded component has been read back from storage and its SHA-256 checksum confirmed against what was sent. Multisite is not supported.
 
 == Requirements ==
 
-* A Nextcloud server reachable over HTTPS with a valid certificate (or a private CA you supply the path to).
-* A dedicated, non-admin Nextcloud account and an app password generated under Personal Settings > Security. Do not use your main Nextcloud account password.
+* To use "Download Now": nothing beyond WordPress itself -- the backup goes straight to your browser.
+* To back up to a Nextcloud, ownCloud, or OpenCloud destination: that server reachable over HTTPS with a valid certificate (or a private CA you supply the path to), plus a dedicated, non-admin account and an app password generated under Personal Settings > Security on that server. Do not use your main account password.
 
 == Installation ==
 
 1. Upload and activate the plugin.
 2. Go to WPThistle > Backup and Restore.
-3. Enter your Nextcloud URL, the dedicated account's username, its app password, and a destination folder.
-4. Click Test Connection.
-5. Click Back Up Now.
+3. To back up to a Nextcloud, ownCloud, or OpenCloud destination: enter its URL, the dedicated account's username, its app password, and a destination folder, then click Test Connection. Skip this step to use "Download Now" instead.
+4. Click Back Up Now.
 
 **Reinstalling or manually updating via Upload Plugin:** if the plugin is already installed and you're uploading a new copy by hand (rather than via Plugins > Updates), WordPress will offer a "Replace current with uploaded" option — use it. If you instead delete and re-upload without that option, or upload more than once without removing the previous attempt first, WordPress creates a second folder (e.g. `wpthistle-backup-restore-1`) instead of overwriting, which can leave a broken or duplicate install. If you ever see two WPThistle Backup and Restore entries in your Plugins list, delete the extra folder via FTP or your host's file manager before activating either one.
 
@@ -189,6 +186,11 @@ separate entries toward N, so you'll reach your kept-count limit one
 backup sooner than expected.
 
 == Changelog ==
+
+= 2.9.1 =
+Documentation and release-process fixes following an external code review. The "View details" popup on the Plugins screen (shown since 2.8.0) was describing the Phase 1 MVP -- manual backups only, no scheduling, no retention, no one-click restore -- long after all of that shipped. Rewritten to describe what 2.9.1 actually does, and to stop assuming every destination is Nextcloud (Download Now and ownCloud/OpenCloud needed no server setup at all). README.md on GitHub had the same two problems (a stale version number, and several Nextcloud-only descriptions of now-multi-backend features). Added an automated check that fails the build if the plugin's version ever disagrees across its own header, this file, README.md, and STATUS.md -- this has drifted stale twice now, this time not a manual fix alone. Also corrected the repo's own `LICENSE` file (named the pre-rename plugin, and was too short for GitHub to recognize as GPLv2 -- now the full canonical license text) and removed lingering "(MVP)" framing from `docs/operations.md`/`docs/architecture.md` where the underlying gaps it described are still real but the MVP framing was not. No backup/restore logic changed.
+
+Reviewed by a security audit before release: not sent -- no plugin runtime code changed (documentation, readme/license text, and CI configuration only).
 
 = 2.9.0 =
 The WPThistle Dock page (the shared landing page across every WPThistle plugin) no longer shows promotional "upgrade to Pro" banners from unrelated third-party plugins. WordPress's notice hooks are global, so any installed plugin's upsell nag could render on this page alongside the WPThistle brand -- now filtered out, on this one page only. Real warnings and errors, including WordPress core's own update/PHP-end-of-life nags, are never affected: this only drops recognizably promotional notices, and keeps anything it isn't confident about rather than risk hiding something that matters. Every other admin page, including this plugin's own settings page, is completely unaffected.

@@ -1,4 +1,4 @@
-# Architecture (MVP)
+# Architecture
 
 ## Module boundaries (MNT-01)
 
@@ -71,13 +71,14 @@ WP-CLI (`wp wpthistle-backup-restore run`) calls the same `create_job`/`advance`
 functions synchronously in a loop until terminal, for deterministic
 scripting/testing — no AJAX, no cron, no timing dependency.
 
-## Why no Composer dependencies in MVP
+## Why no Composer dependencies
 
-Every MVP requirement (WebDAV client, ZIP writer, SQL export) is reachable
-with WordPress core APIs (`wp_remote_request`, `ZipArchive`, `$wpdb`) and
-hand-written, unit-tested code small enough to review in full. MNT-12
-("use Composer only where it improves maintainability... prefer standard
-supported WordPress/PHP APIs when sufficient") is read here as: for MVP,
-sufficient. PHPCS/PHPStan/PHPUnit are **dev-only** tooling, never shipped in
+Every feature this plugin ships (WebDAV client, ZIP writer, SQL export,
+notifications, migration/URL rewriting) is reachable with WordPress core
+APIs (`wp_remote_request`, `ZipArchive`, `$wpdb`) and hand-written,
+unit-tested code small enough to review in full. MNT-12 ("use Composer
+only where it improves maintainability... prefer standard supported
+WordPress/PHP APIs when sufficient") is read here as: still sufficient.
+PHPCS/PHPStan/PHPUnit are **dev-only** tooling, never shipped in
 the release ZIP (enforced by the packaging script, `docker/scripts/package.ps1`,
 which copies only `plugin/wpthistle-backup-restore/` contents).

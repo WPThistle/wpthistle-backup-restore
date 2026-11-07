@@ -27,8 +27,15 @@ attaches that zip automatically on any `v*` tag push, gated behind the
 same lint/unit/E2E jobs every push already runs (a broken build can
 never produce a release asset):
 
-1. Bump `Version:` in `plugin/wpthistle-backup-restore/wpthistle-backup-restore.php`
-   and `WPTHISTLE_BACKUP_VERSION`, and `Stable tag:` in `readme.txt`.
+1. Bump every current-version source to the same `X.Y.Z`: `Version:` and
+   `WPTHISTLE_BACKUP_VERSION` in
+   `plugin/wpthistle-backup-restore/wpthistle-backup-restore.php`,
+   `Stable tag:` in `readme.txt`, and the `**Status:**` line in
+   `README.md`. README.md's Status line is the one that has drifted
+   stale before (missed in a release, caught two releases later) —
+   `tests/check-version-consistency.sh` (run in CI's
+   `php-syntax-and-style` job on every push) fails the build if any of
+   these disagree, so a drift can't ship silently again.
 2. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. CI builds `wpthistle-backup-restore-X.Y.Z.zip` from that tag (same
    `git archive --prefix=wpthistle-backup-restore/` shape as below) and
